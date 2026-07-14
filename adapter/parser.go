@@ -216,6 +216,17 @@ func ParseProxy(mapping map[string]any, options ...ProxyOption) (C.Proxy, error)
 			break
 		}
 		proxy, err = outbound.NewZeroTier(*zeroTierOption)
+	case "xhttp":
+		xhttpOption := &outbound.XHttpOption{BasicOption: basicOption}
+		err = decoder.Decode(mapping, xhttpOption)
+		if err != nil {
+			break
+		}
+		raw, err := outbound.NewXHttp(*xhttpOption)
+		if err != nil {
+			return nil, err
+		}
+		return outbound.NewXHttpProxyWrapper(NewProxy(raw), raw), nil
 	default:
 		return nil, fmt.Errorf("unsupport proxy type: %s", proxyType)
 	}

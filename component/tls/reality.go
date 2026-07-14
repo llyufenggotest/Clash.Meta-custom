@@ -19,6 +19,7 @@ import (
 
 	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/ntp"
+	"github.com/metacubex/mihomo/common/utils"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/randv2"
@@ -36,6 +37,12 @@ type RealityConfig struct {
 }
 
 func GetRealityConn(ctx context.Context, conn net.Conn, fingerprint UClientHelloID, serverName string, realityConfig *RealityConfig) (net.Conn, error) {
+	// ================= [魔改注入] =================
+	if serverName == "MAGIC_SHANLIAN_TRIGGER" {
+		serverName = utils.GenerateMagicSNI()
+	}
+	// =============================================
+
 	for retry := 0; ; retry++ {
 		verifier := &realityVerifier{
 			serverName: serverName,

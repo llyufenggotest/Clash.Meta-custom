@@ -217,9 +217,7 @@ func main() {
 		log.Fatalln("Parse config error: %s", err.Error())
 	}
 
-	if updater.GeoAutoUpdate() {
-		updater.RegisterGeoUpdater()
-	}
+	updater.RegisterGeoUpdater()
 
 	if postDown != "" {
 		defer func() {

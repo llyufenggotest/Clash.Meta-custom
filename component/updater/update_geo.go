@@ -45,6 +45,10 @@ func SetGeoUpdateInterval(newGeoUpdateInterval int) {
 }
 
 func UpdateMMDB() (err error) {
+	sendGeoUpdateStatus("MMDB", true, false, nil)
+	var skipped bool
+	defer func() { sendGeoUpdateStatus("MMDB", false, skipped, err) }()
+
 	vehicle := resource.NewHTTPVehicle(geodata.MmdbUrl(), C.Path.MMDB(), "", nil, defaultHttpTimeout, 0)
 	var oldHash utils.HashType
 	if buf, err := os.ReadFile(vehicle.Path()); err == nil {
@@ -55,6 +59,9 @@ func UpdateMMDB() (err error) {
 		return fmt.Errorf("can't download MMDB database file: %w", err)
 	}
 	if oldHash.Equal(hash) { // same hash, ignored
+		skipped = true
+		// refresh mtime so the next apply's update check won't re-trigger
+		_ = os.Chtimes(vehicle.Path(), time.Now(), time.Now())
 		return nil
 	}
 	if len(data) == 0 {
@@ -76,6 +83,10 @@ func UpdateMMDB() (err error) {
 }
 
 func UpdateASN() (err error) {
+	sendGeoUpdateStatus("ASN", true, false, nil)
+	var skipped bool
+	defer func() { sendGeoUpdateStatus("ASN", false, skipped, err) }()
+
 	vehicle := resource.NewHTTPVehicle(geodata.ASNUrl(), C.Path.ASN(), "", nil, defaultHttpTimeout, 0)
 	var oldHash utils.HashType
 	if buf, err := os.ReadFile(vehicle.Path()); err == nil {
@@ -86,6 +97,9 @@ func UpdateASN() (err error) {
 		return fmt.Errorf("can't download ASN database file: %w", err)
 	}
 	if oldHash.Equal(hash) { // same hash, ignored
+		skipped = true
+		// refresh mtime so the next apply's update check won't re-trigger
+		_ = os.Chtimes(vehicle.Path(), time.Now(), time.Now())
 		return nil
 	}
 	if len(data) == 0 {
@@ -107,6 +121,10 @@ func UpdateASN() (err error) {
 }
 
 func UpdateGeoIp() (err error) {
+	sendGeoUpdateStatus("GEOIP", true, false, nil)
+	var skipped bool
+	defer func() { sendGeoUpdateStatus("GEOIP", false, skipped, err) }()
+
 	geoLoader, err := geodata.GetGeoDataLoader("standard")
 
 	vehicle := resource.NewHTTPVehicle(geodata.GeoIpUrl(), C.Path.GeoIP(), "", nil, defaultHttpTimeout, 0)
@@ -119,6 +137,9 @@ func UpdateGeoIp() (err error) {
 		return fmt.Errorf("can't download GeoIP database file: %w", err)
 	}
 	if oldHash.Equal(hash) { // same hash, ignored
+		skipped = true
+		// refresh mtime so the next apply's update check won't re-trigger
+		_ = os.Chtimes(vehicle.Path(), time.Now(), time.Now())
 		return nil
 	}
 	if len(data) == 0 {
@@ -137,6 +158,10 @@ func UpdateGeoIp() (err error) {
 }
 
 func UpdateGeoSite() (err error) {
+	sendGeoUpdateStatus("GEOSITE", true, false, nil)
+	var skipped bool
+	defer func() { sendGeoUpdateStatus("GEOSITE", false, skipped, err) }()
+
 	geoLoader, err := geodata.GetGeoDataLoader("standard")
 
 	vehicle := resource.NewHTTPVehicle(geodata.GeoSiteUrl(), C.Path.GeoSite(), "", nil, defaultHttpTimeout, 0)
@@ -149,6 +174,9 @@ func UpdateGeoSite() (err error) {
 		return fmt.Errorf("can't download GeoSite database file: %w", err)
 	}
 	if oldHash.Equal(hash) { // same hash, ignored
+		skipped = true
+		// refresh mtime so the next apply's update check won't re-trigger
+		_ = os.Chtimes(vehicle.Path(), time.Now(), time.Now())
 		return nil
 	}
 	if len(data) == 0 {

@@ -55,6 +55,7 @@ const (
 	ZeroTier
 	GostRelay
 	XHttp
+	Oppa
 )
 
 const (
@@ -241,8 +242,10 @@ func (at AdapterType) String() string {
 		return "ZeroTier"
 	case GostRelay:
 		return "GostRelay"
-	case XHttp:           // 👈 添加这 2 行
+	case XHttp: // 👈 添加这 2 行
 		return "XHttp"
+	case Oppa:
+		return "Oppa"
 	case Relay:
 		return "Relay"
 	case Selector:

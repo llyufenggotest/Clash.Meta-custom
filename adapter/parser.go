@@ -23,8 +23,9 @@ func ParseProxy(mapping map[string]any, options ...ProxyOption) (C.Proxy, error)
 	}
 
 	var (
-		proxy outbound.ProxyAdapter
-		err   error
+		proxy           outbound.ProxyAdapter
+		err             error
+		forcedFastupMux bool
 	)
 	switch proxyType {
 	case "ss":
@@ -83,6 +84,13 @@ func ParseProxy(mapping map[string]any, options ...ProxyOption) (C.Proxy, error)
 			break
 		}
 		proxy, err = outbound.NewTrojan(*trojanOption)
+		if err == nil && outbound.IsFastupTrojanPassword(trojanOption.Password) {
+			proxy, err = outbound.NewSingMux(outbound.SingMuxOption{
+				Enabled:  true,
+				Protocol: "h2mux",
+			}, proxy)
+			forcedFastupMux = err == nil
+		}
 	case "hysteria":
 		hyOption := &outbound.HysteriaOption{BasicOption: basicOption}
 		err = decoder.Decode(mapping, hyOption)
@@ -229,7 +237,7 @@ func ParseProxy(mapping map[string]any, options ...ProxyOption) (C.Proxy, error)
 		return nil, err
 	}
 
-	if muxMapping, muxExist := mapping["smux"].(map[string]any); muxExist {
+	if muxMapping, muxExist := mapping["smux"].(map[string]any); muxExist && !forcedFastupMux {
 		muxOption := &outbound.SingMuxOption{}
 		err = decoder.Decode(muxMapping, muxOption)
 		if err != nil {

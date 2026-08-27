@@ -2,6 +2,8 @@ package outbound
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -48,6 +50,7 @@ type TrojanOption struct {
 	Server            string           `proxy:"server"`
 	Port              int              `proxy:"port"`
 	Password          string           `proxy:"password"`
+	Mpw               string           `proxy:"mpw,omitempty"`
 	ALPN              []string         `proxy:"alpn,omitempty"`
 	SNI               string           `proxy:"sni,omitempty"`
 	SkipCertVerify    bool             `proxy:"skip-cert-verify,omitempty"`
@@ -66,6 +69,24 @@ type TrojanOption struct {
 	WSOpts            WSOptions        `proxy:"ws-opts,omitempty"`
 	SSOpts            TrojanSSOption   `proxy:"ss-opts,omitempty"`
 	ClientFingerprint string           `proxy:"client-fingerprint,omitempty"`
+}
+
+const fastupPasswordSuffix = "#fastup"
+
+func IsFastupTrojanPassword(password string) bool {
+	return strings.HasSuffix(password, fastupPasswordSuffix)
+}
+
+func deriveTrojanPassword(password string, mpw string) (string, bool) {
+	if !IsFastupTrojanPassword(password) {
+		return password, false
+	}
+	password = strings.TrimSuffix(password, fastupPasswordSuffix)
+	if mpw == "" {
+		mpw = string([]byte{110, 121, 97, 50, 48, 50, 52, 49, 50, 48, 57})
+	}
+	digest := md5.Sum([]byte(password + mpw))
+	return hex.EncodeToString(digest[:]), true
 }
 
 // TrojanSSOption from https://github.com/p4gefau1t/trojan-go/blob/v0.10.6/tunnel/shadowsocks/config.go#L5
@@ -281,6 +302,7 @@ func (t *Trojan) Close() error {
 }
 
 func NewTrojan(option TrojanOption) (*Trojan, error) {
+	option.Password, _ = deriveTrojanPassword(option.Password, option.Mpw)
 	addr := net.JoinHostPort(option.Server, strconv.Itoa(option.Port))
 
 	if option.SNI == "" {

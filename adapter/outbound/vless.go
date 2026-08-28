@@ -13,6 +13,7 @@ import (
 	"github.com/metacubex/mihomo/common/convert"
 	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/utils"
+
 	"github.com/metacubex/mihomo/component/ca"
 	"github.com/metacubex/mihomo/component/ech"
 	tlsC "github.com/metacubex/mihomo/component/tls"
@@ -331,12 +332,6 @@ func (v *Vless) streamTLSConn(ctx context.Context, conn net.Conn, isH2 bool) (ne
 			tlsOpts.Host = v.option.ServerName
 		}
 
-		// ================= [魔改注入] =================
-		if tlsOpts.Host == "MAGIC_SHANLIAN_TRIGGER" {
-			tlsOpts.Host = utils.GenerateMagicSNI()
-		}
-		// =============================================
-
 		return vmess.StreamTLSConn(ctx, conn, &tlsOpts)
 	}
 
@@ -468,17 +463,8 @@ func parseVlessAddr(metadata *C.Metadata, xudp bool) *vless.DstAddr {
 func NewVless(option VlessOption) (*Vless, error) {
 	// 🚀 清除首尾空格
 	option.UUID = strings.TrimSpace(option.UUID)
-	
-	// ================= [保留你之前的 #sl 魔改] =================
-	if strings.HasSuffix(option.UUID, "#sl") {
-		option.UUID = strings.TrimSuffix(option.UUID, "#sl")
-		if option.TLS {
-			option.ServerName = "MAGIC_SHANLIAN_TRIGGER"
-		}
-	}
-	// ========================================================
 
-	// ================= [✨新增 x365 魔改检测] =================
+	// ================= [x365 custom protocol detection] =================
 	isX365 := false
 	if strings.HasSuffix(option.UUID, "#x365") {
 		isX365 = true

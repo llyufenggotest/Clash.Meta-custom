@@ -700,7 +700,7 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	config.Rules = rules
+	config.Rules = prependProxyServerBypassRules(rules, proxies)
 
 	hosts, err := parseHosts(rawCfg)
 	if err != nil {

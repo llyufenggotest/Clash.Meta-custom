@@ -125,7 +125,11 @@ func UpdateASN() (err error) {
 	_ = instance.Close()
 
 	defer mmdb.ReloadASN()
-	mmdb.ASNInstance().Reader.Close() //  mmdb is loaded with mmap, so it needs to be closed before overwriting the file
+	// mmdb is loaded with mmap, so it needs to be closed before overwriting the
+	// file. The reader is nil on builds that never map the database.
+	if reader := mmdb.ASNInstance().Reader; reader != nil {
+		_ = reader.Close()
+	}
 	if err = vehicle.Write(data); err != nil {
 		return fmt.Errorf("can't save ASN database file: %w", err)
 	}

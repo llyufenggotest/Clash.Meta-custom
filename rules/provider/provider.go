@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"runtime"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/metacubex/mihomo/component/resource"
 	C "github.com/metacubex/mihomo/constant"
 	P "github.com/metacubex/mihomo/constant/provider"
+	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/rules/common"
 )
 
@@ -144,7 +146,36 @@ func NewRuleSetProvider(name string, behavior P.RuleBehavior, format P.RuleForma
 		rp.strategy = rulesParseInline(payload, rp.strategy)
 	}
 	rp.Fetcher = resource.NewFetcher(name, interval, vehicle, bundleFile, func(bytes []byte) (ruleStrategy, error) {
-		return rulesParse(bytes, newStrategy(behavior, parse), format)
+		// Memory-constrained builds (the iOS Network Extension) try the
+		// pre-computed MRS sidecar first: building the matcher from raw text is
+		// what spikes the footprint, and the sidecar skips that entirely while
+		// keeping every rule. See mrs_sidecar.go for the measurements.
+		if maxLowMemoryRuleCount > 0 && format != P.MrsRule {
+			if path, ok := sidecarUsable(vehicle.Path()); ok {
+				strategy, err := loadFromSidecar(path, behavior)
+				if err == nil {
+					log.Infoln(
+						"[Provider] %s loaded %d rules from MRS sidecar (skipped trie build)",
+						name, strategy.Count(),
+					)
+					return strategy, nil
+				}
+				// A corrupt or mismatched sidecar must not be fatal: fall
+				// through to the raw path, which may still fit the budget.
+				log.Warnln("[Provider] %s sidecar unusable, falling back: %v", name, err)
+			}
+		}
+
+		strategy, err := rulesParse(bytes, newStrategy(behavior, parse), format)
+		if err != nil {
+			return nil, err
+		}
+		// On unconstrained builds, persist the finished bitmap so the extension
+		// can load it next time without paying the build cost.
+		if maxLowMemoryRuleCount == 0 && format != P.MrsRule {
+			writeSidecar(vehicle.Path(), behavior, strategy)
+		}
+		return strategy, nil
 	}, onUpdate)
 
 	wrapper := &RuleSetProvider{
@@ -174,6 +205,11 @@ func newStrategy(behavior P.RuleBehavior, parse common.ParseRuleFunc) ruleStrate
 var (
 	ErrNoPayload     = errors.New("file must have a `payload` field")
 	ErrInvalidFormat = errors.New("invalid format")
+
+	// ErrRuleSetTooLarge is returned when a rule set exceeds the low-memory
+	// build's budget. It is a load failure for that one provider, not a config
+	// error: the caller logs it and carries on with the remaining rule sets.
+	ErrRuleSetTooLarge = errors.New("rule set too large for this build")
 )
 
 func rulesParse(buf []byte, strategy ruleStrategy, format P.RuleFormat) (ruleStrategy, error) {
@@ -263,6 +299,17 @@ func rulesParse(buf []byte, strategy ruleStrategy, format P.RuleFormat) (ruleStr
 		}
 
 		strategy.Insert(str)
+
+		// Bail out before FinishInsert() rather than after: the matcher build is
+		// where the footprint spike happens, and on a jetsam-capped extension the
+		// process is killed mid-build. Counting during the scan lets us stop
+		// while the cost is still just the parsed entries.
+		if maxLowMemoryRuleCount > 0 && strategy.Count() > maxLowMemoryRuleCount {
+			return nil, fmt.Errorf(
+				"%w: %d rules exceeds the %d-rule budget for the low-memory build",
+				ErrRuleSetTooLarge, strategy.Count(), maxLowMemoryRuleCount,
+			)
+		}
 	}
 
 	strategy.FinishInsert()

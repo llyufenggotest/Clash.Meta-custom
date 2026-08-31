@@ -114,6 +114,7 @@ func ApplyConfig(cfg *config.Config, force bool) {
 
 	initInnerTcp()
 	loadProvider(cfg.Providers)
+	wireFastNodeCache()
 	updateProfile(cfg)
 	loadRuleProviders(cfg.RuleProviders)
 	runtime.GC()
@@ -481,6 +482,24 @@ func updateProfile(cfg *config.Config) {
 		patchSelectGroup(cfg.Proxies)
 	}
 }
+
+// wireFastNodeCache connects url-test groups to the profile cache so a group's
+// resolved node survives a restart. This is independent of StoreSelected: it
+// caches a decision the group made on its own (not a user selection), purely to
+// avoid a cold start dialing a dead proxies[0] while the health check runs.
+// Registered once; the closures read the live cache each call.
+func wireFastNodeCache() {
+	fastNodeWireOnce.Do(func() {
+		outboundgroup.SetFastNodeLoader(func(group string) string {
+			return cachefile.Cache().FastNodeMap()[group]
+		})
+		outboundgroup.SetFastNodePersister(func(group, node string) {
+			cachefile.Cache().SetFastNode(group, node)
+		})
+	})
+}
+
+var fastNodeWireOnce sync.Once
 
 func patchSelectGroup(proxies map[string]C.Proxy) {
 	mapping := cachefile.Cache().SelectedMap()

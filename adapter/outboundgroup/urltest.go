@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/metacubex/mihomo/common/callback"
@@ -12,6 +13,7 @@ import (
 	"github.com/metacubex/mihomo/common/utils"
 	C "github.com/metacubex/mihomo/constant"
 	P "github.com/metacubex/mihomo/constant/provider"
+	"github.com/metacubex/mihomo/log"
 )
 
 type URLTestOption struct {
@@ -27,6 +29,37 @@ type URLTest struct {
 	disableUDP     bool
 	fastNode       C.Proxy
 	fastSingle     *singledo.Single[C.Proxy]
+
+	// cachedFastNode is the node this group resolved to on a previous run,
+	// loaded once from the on-disk cache. Before any health check has produced
+	// delay data, a url-test group otherwise falls back to proxies[0], which on
+	// a real subscription is frequently a dead node — the user then waits out
+	// several dial timeouts before traffic flows. Seeding from the last
+	// known-good node makes a cold start route immediately, while the periodic
+	// health check still switches to a faster node when one is found.
+	cachedFastNode     string
+	cachedFastNodeOnce sync.Once
+	persistedFastNode  string
+}
+
+// fastNodePersister lets the group write its resolved node back to the profile
+// cache without importing that package directly (which would create an import
+// cycle). executor wires it up at startup.
+var fastNodePersister func(group, node string)
+
+// SetFastNodePersister registers the sink used to remember a url-test group's
+// resolved node across restarts. Nil-safe: if never set, the cache is simply
+// not written and behaviour is unchanged.
+func SetFastNodePersister(fn func(group, node string)) {
+	fastNodePersister = fn
+}
+
+// fastNodeLoader supplies the previously cached node for a group at startup.
+var fastNodeLoader func(group string) string
+
+// SetFastNodeLoader registers the source of the last known-good node per group.
+func SetFastNodeLoader(fn func(group string) string) {
+	fastNodeLoader = fn
 }
 
 func (u *URLTest) Now() string {
@@ -139,6 +172,26 @@ func (u *URLTest) fast(touch bool) C.Proxy {
 		if u.fastNode == nil || fastNotExist || !u.fastNode.AliveForTestUrl(u.testUrl) || u.fastNode.LastDelayForTestUrl(u.testUrl) > fast.LastDelayForTestUrl(u.testUrl)+u.tolerance {
 			u.fastNode = fast
 		}
+
+		// Cold start: no proxy has delay data yet, so the block above just
+		// picked proxies[0] with a zero delay — frequently a dead node. If a
+		// previous run left us a known-good node that still exists in this
+		// group, prefer it so the very first packet routes through something
+		// that actually worked, instead of stalling on dial timeouts until the
+		// health check finishes.
+		if u.noDelayData() {
+			if cached := u.loadCachedFastNode(); cached != "" {
+				for _, proxy := range proxies {
+					if proxy.Name() == cached {
+						u.fastNode = proxy
+						log.Infoln("[URLTest] %s cold-started on cached fast node %s (no delay data yet)", u.Name(), cached)
+						break
+					}
+				}
+			}
+		}
+
+		u.persistFastNode(u.fastNode.Name())
 		return u.fastNode, nil
 	})
 	if shared && touch { // a shared fastSingle.Do() may cause providers untouched, so we touch them again
@@ -146,6 +199,44 @@ func (u *URLTest) fast(touch bool) C.Proxy {
 	}
 
 	return elm
+}
+
+// noDelayData reports whether the health check has yet to record a live delay
+// for any node in the group. Proxy.LastDelayForTestUrl returns the sentinel
+// 0xffff when a node has no recorded delay for this test URL, so "has data"
+// means a value strictly below that sentinel. In the no-data window the normal
+// smallest-delay comparison is meaningless and the cached node should win.
+func (u *URLTest) noDelayData() bool {
+	const noDelaySentinel uint16 = 0xffff
+	for _, proxy := range u.GetProxies(false) {
+		if proxy.LastDelayForTestUrl(u.testUrl) < noDelaySentinel {
+			return false
+		}
+	}
+	return true
+}
+
+// loadCachedFastNode reads the last known-good node exactly once per group.
+func (u *URLTest) loadCachedFastNode() string {
+	u.cachedFastNodeOnce.Do(func() {
+		if fastNodeLoader != nil {
+			u.cachedFastNode = fastNodeLoader(u.Name())
+		}
+	})
+	return u.cachedFastNode
+}
+
+// persistFastNode writes the resolved node back to the cache when it changes,
+// so the next cold start can use it. Cheap dedupe avoids a bbolt write on every
+// dial.
+func (u *URLTest) persistFastNode(node string) {
+	if node == "" || node == u.persistedFastNode {
+		return
+	}
+	u.persistedFastNode = node
+	if fastNodePersister != nil {
+		fastNodePersister(u.Name(), node)
+	}
 }
 
 // SupportUDP implements C.ProxyAdapter

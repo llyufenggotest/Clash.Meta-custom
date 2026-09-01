@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"path/filepath"
@@ -227,12 +228,67 @@ func RuleProviders() map[string]P.RuleProvider {
 }
 
 // UpdateProxies handle update proxies
+//
+// Providers that are not part of the new set are closed before being dropped.
+// A provider owns a health-check goroutine that holds a reference to its proxy
+// slice, so replacing the map alone leaks both the goroutine and every proxy it
+// probes: switching subscriptions used to leave the previous subscription's
+// health checks running forever, pinning its nodes in memory. That is fatal on
+// iOS, where jetsam accounts phys_footprint and reclaim cannot free pages a
+// live goroutine still references.
 func UpdateProxies(newProxies map[string]C.Proxy, newProviders map[string]P.ProxyProvider) {
 	configMux.Lock()
+	stale := staleProviders(providers, newProviders)
 	proxies = newProxies
 	providers = newProviders
 	invalidateAllProxies()
 	configMux.Unlock()
+
+	closeProviders(stale)
+}
+
+// staleProviders returns the providers present in old but absent from next.
+// Identity is compared by pointer, not by name: reloading the same subscription
+// builds fresh provider objects, and the previous ones must still be closed.
+func staleProviders(old, next map[string]P.ProxyProvider) []P.ProxyProvider {
+	if len(old) == 0 {
+		return nil
+	}
+	retained := make(map[P.ProxyProvider]struct{}, len(next))
+	for _, provider := range next {
+		retained[provider] = struct{}{}
+	}
+	stale := make([]P.ProxyProvider, 0, len(old))
+	for _, provider := range old {
+		if provider == nil {
+			continue
+		}
+		if _, keep := retained[provider]; keep {
+			continue
+		}
+		stale = append(stale, provider)
+	}
+	return stale
+}
+
+// closeProviders stops the given providers outside configMux: Close cancels a
+// health-check context, and a probe in flight may still be reading tunnel state.
+// ProxyProvider does not declare Close, so the capability is probed instead of
+// assumed -- inline "compatible" providers implement it, and a future provider
+// type that does not simply keeps the old no-op behaviour.
+func closeProviders(stale []P.ProxyProvider) {
+	for _, provider := range stale {
+		closer, ok := provider.(io.Closer)
+		if !ok {
+			continue
+		}
+		name := provider.Name()
+		if err := closer.Close(); err != nil {
+			log.Warnln("[Provider] close %s: %s", name, err.Error())
+			continue
+		}
+		log.Infoln("[Provider] closed stale provider %s", name)
+	}
 }
 
 func UpdateListeners(newListeners map[string]C.InboundListener) {

@@ -40,7 +40,9 @@ type RuleExtra struct {
 }
 
 func getRules(w http.ResponseWriter, r *http.Request) {
-	rawRules := tunnel.Rules()
+	lease := tunnel.AcquireRuleSnapshot()
+	defer lease.Release()
+	rawRules := lease.Rules()
 	rules := make([]Rule, 0, len(rawRules))
 	for index, rule := range rawRules {
 		r := Rule{
@@ -83,7 +85,9 @@ func disableRules(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(payload) != 0 {
-		rules := tunnel.Rules()
+		lease := tunnel.AcquireRuleSnapshot()
+		defer lease.Release()
+		rules := lease.Rules()
 		for index, disabled := range payload {
 			if index < 0 || index >= len(rules) {
 				continue

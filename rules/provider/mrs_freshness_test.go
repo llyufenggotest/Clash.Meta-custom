@@ -99,13 +99,24 @@ func (v *freshnessVehicle) Write(b []byte) error {
 	return os.WriteFile(v.path, b, 0600)
 }
 
+type freshnessRuleSnapshotLease struct{}
+
+func (*freshnessRuleSnapshotLease) RuleProviders() map[string]P.RuleProvider { return nil }
+func (*freshnessRuleSnapshotLease) Release()                                 {}
+
 type freshnessTunnel struct {
-	callback utils.Callback[P.RuleProvider]
+	callback utils.Callback[P.RuleUpdate]
 }
 
-func (*freshnessTunnel) Providers() map[string]P.ProxyProvider                 { return nil }
-func (*freshnessTunnel) RuleProviders() map[string]P.RuleProvider              { return nil }
-func (t *freshnessTunnel) RuleUpdateCallback() *utils.Callback[P.RuleProvider] { return &t.callback }
+func (*freshnessTunnel) Providers() map[string]P.ProxyProvider    { return nil }
+func (*freshnessTunnel) RuleProviders() map[string]P.RuleProvider { return nil }
+func (*freshnessTunnel) AcquireRuleProviders() (map[string]P.RuleProvider, func()) {
+	return nil, func() {}
+}
+func (*freshnessTunnel) AcquireRuleSnapshot() P.RuleSnapshotLease {
+	return &freshnessRuleSnapshotLease{}
+}
+func (t *freshnessTunnel) RuleUpdateCallback() *utils.Callback[P.RuleUpdate] { return &t.callback }
 
 func freshProvider(t *testing.T, v *freshnessVehicle) *RuleSetProvider {
 	t.Helper()

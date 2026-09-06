@@ -445,24 +445,32 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 			return
 		}
 
-		var markMode bool
-		for _, routeAddressSet := range options.RouteAddressSet {
-			rp, loaded := rpTunnel.RuleProviders()[routeAddressSet]
-			if !loaded {
-				err = E.New("parse route-address-set: rule-set not found: ", routeAddressSet)
-				return
+		markMode, routeRuleErr := func() (bool, error) {
+			lease := rpTunnel.AcquireRuleSnapshot()
+			defer lease.Release()
+			providers := lease.RuleProviders()
+			var markMode bool
+			for _, routeAddressSet := range options.RouteAddressSet {
+				rp, loaded := providers[routeAddressSet]
+				if !loaded {
+					return false, E.New("parse route-address-set: rule-set not found: ", routeAddressSet)
+				}
+				l.updateRule(rp.Name(), rp.Strategy(), false, false)
+				markMode = true
 			}
-			l.updateRule(rp, false, false)
-			markMode = true
-		}
-		for _, routeExcludeAddressSet := range options.RouteExcludeAddressSet {
-			rp, loaded := rpTunnel.RuleProviders()[routeExcludeAddressSet]
-			if !loaded {
-				err = E.New("parse route-exclude_address-set: rule-set not found: ", routeExcludeAddressSet)
-				return
+			for _, routeExcludeAddressSet := range options.RouteExcludeAddressSet {
+				rp, loaded := providers[routeExcludeAddressSet]
+				if !loaded {
+					return false, E.New("parse route-exclude_address-set: rule-set not found: ", routeExcludeAddressSet)
+				}
+				l.updateRule(rp.Name(), rp.Strategy(), true, false)
+				markMode = true
 			}
-			l.updateRule(rp, true, false)
-			markMode = true
+			return markMode, nil
+		}()
+		if routeRuleErr != nil {
+			err = routeRuleErr
+			return
 		}
 		if markMode {
 			tunOptions.AutoRedirectMarkMode = true
@@ -540,14 +548,13 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 	return
 }
 
-func (l *Listener) ruleUpdateCallback(ruleProvider P.RuleProvider) {
-	name := ruleProvider.Name()
-	if slices.Contains(l.options.RouteAddressSet, name) {
-		l.updateRule(ruleProvider, false, true)
+func (l *Listener) ruleUpdateCallback(update P.RuleUpdate) {
+	if slices.Contains(l.options.RouteAddressSet, update.Name) {
+		l.updateRule(update.Name, update.Strategy, false, true)
 		return
 	}
-	if slices.Contains(l.options.RouteExcludeAddressSet, name) {
-		l.updateRule(ruleProvider, true, true)
+	if slices.Contains(l.options.RouteExcludeAddressSet, update.Name) {
+		l.updateRule(update.Name, update.Strategy, true, true)
 		return
 	}
 }
@@ -556,11 +563,10 @@ type toIpCidr interface {
 	ToIpCidr() *netipx.IPSet
 }
 
-func (l *Listener) updateRule(ruleProvider P.RuleProvider, exclude bool, update bool) {
+func (l *Listener) updateRule(name string, strategy any, exclude bool, update bool) {
 	l.ruleUpdateMutex.Lock()
 	defer l.ruleUpdateMutex.Unlock()
-	name := ruleProvider.Name()
-	switch rp := ruleProvider.Strategy().(type) {
+	switch rp := strategy.(type) {
 	case toIpCidr:
 		if !exclude {
 			ipCidr := rp.ToIpCidr()

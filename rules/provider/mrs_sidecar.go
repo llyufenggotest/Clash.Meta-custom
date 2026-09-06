@@ -32,6 +32,10 @@ func loadFromSidecar(path string, source []byte, behavior P.RuleBehavior) (ruleS
 	if err != nil {
 		return nil, err
 	}
+	return loadFromSidecarBytes(buf, source, behavior)
+}
+
+func loadFromSidecarBytes(buf, source []byte, behavior P.RuleBehavior) (ruleStrategy, error) {
 	if len(buf) < sidecarHeaderSize || string(buf[:len(sidecarMagic)]) != sidecarMagic {
 		return nil, fmt.Errorf("unversioned or truncated MRS sidecar; rebuild in app")
 	}

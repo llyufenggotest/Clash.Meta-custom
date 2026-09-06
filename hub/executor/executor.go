@@ -40,6 +40,8 @@ import (
 	"github.com/metacubex/mihomo/listener/tproxy"
 	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/ntp/ntp"
+	R "github.com/metacubex/mihomo/rules"
+	RP "github.com/metacubex/mihomo/rules/provider"
 	"github.com/metacubex/mihomo/tunnel"
 )
 
@@ -79,6 +81,13 @@ func ParseWithPath(path string) (*config.Config, error) {
 // ParseWithBytes config with buffer
 func ParseWithBytes(buf []byte) (*config.Config, error) {
 	return config.Parse(buf)
+}
+
+// PrepareRuleProvider prepares exactly one Dart-extracted provider definition.
+// The caller supplies the immutable cache path; definition path/url fields are
+// metadata only and cannot redirect writes.
+func PrepareRuleProvider(name string, definition map[string]any, targetPath string) (RP.PreparedRuleProvider, error) {
+	return RP.PrepareRuleProvider(name, definition, targetPath, R.ParseRule)
 }
 
 // ApplyConfig dispatch configure to all parts without ExternalController
@@ -574,6 +583,7 @@ func Shutdown() {
 	listener.Cleanup()
 	tproxy.CleanupTProxyIPTables()
 	resolver.StoreFakePoolState()
+	tunnel.RetireRuleProviders()
 
 	log.Warnln("Mihomo shutting down")
 }

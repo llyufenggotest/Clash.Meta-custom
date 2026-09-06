@@ -2,6 +2,8 @@ package provider
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/metacubex/mihomo/common/pool"
@@ -88,18 +91,62 @@ func (bp *baseProvider) Strategy() any {
 	return bp.strategy
 }
 
+type loadedRuleStrategy struct {
+	strategy ruleStrategy
+	digest   string
+}
+
 type ruleSetProvider struct {
 	baseProvider
-	*resource.Fetcher[ruleStrategy]
+	*resource.Fetcher[loadedRuleStrategy]
 	format P.RuleFormat
 }
 
 type RuleSetProvider struct {
 	*ruleSetProvider
+	readyMu     sync.RWMutex
+	readyDigest string
 }
 
 func (rp *RuleSetProvider) Format() P.RuleFormat {
 	return rp.format
+}
+
+// Match and Count share the snapshot lock with ExtensionReadyDigest, so callers
+// cannot observe a matcher and readiness digest from different updates.
+func (rp *RuleSetProvider) Match(metadata *C.Metadata, helper C.RuleMatchHelper) bool {
+	rp.readyMu.RLock()
+	defer rp.readyMu.RUnlock()
+	return rp.baseProvider.Match(metadata, helper)
+}
+
+func (rp *RuleSetProvider) Count() int {
+	rp.readyMu.RLock()
+	defer rp.readyMu.RUnlock()
+	return rp.baseProvider.Count()
+}
+
+func (rp *RuleSetProvider) Strategy() any {
+	rp.readyMu.RLock()
+	defer rp.readyMu.RUnlock()
+	return rp.baseProvider.Strategy()
+}
+
+func (rp *RuleSetProvider) ExtensionReadyDigest() (string, error) {
+	rp.readyMu.RLock()
+	defer rp.readyMu.RUnlock()
+	if rp.readyDigest == "" {
+		return "", fmt.Errorf("provider has no loaded ready snapshot")
+	}
+	return rp.readyDigest, nil
+}
+
+func extensionReadyDigest(behavior P.RuleBehavior, format P.RuleFormat, count int, raw, sidecar []byte) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "rule-ready-v1\x00%s\x00%s\x00%d\x00", behavior.String(), format.String(), count)
+	h.Write(raw)
+	h.Write(sidecar)
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func (rp *ruleSetProvider) Initial() error {
@@ -117,18 +164,14 @@ const extensionRawRuleBudget = 10000
 // ValidateForExtension runs in Runner after Initial has rebuilt missing/legacy
 // sidecars. A warning-only write failure must not be reported as readiness.
 func (rp *RuleSetProvider) ValidateForExtension() error {
-	if rp.format == P.MrsRule || rp.Count() <= extensionRawRuleBudget {
+	count := rp.Count()
+	if rp.format == P.MrsRule || count <= extensionRawRuleBudget {
 		return nil
 	}
 	if rp.behavior == P.Classical {
-		return fmt.Errorf("%w: classical provider has %d rules, exceeds %d-rule extension budget; classical has no safe MRS representation", ErrRuleSetTooLarge, rp.Count(), extensionRawRuleBudget)
+		return fmt.Errorf("%w: classical provider has %d rules, exceeds %d-rule extension budget; classical has no safe MRS representation", ErrRuleSetTooLarge, count, extensionRawRuleBudget)
 	}
-	source, err := os.ReadFile(rp.Vehicle().Path())
-	if err != nil {
-		return err
-	}
-	_, err = loadFromSidecar(sidecarPath(rp.Vehicle().Path()), source, rp.behavior)
-	if err != nil {
+	if _, err := rp.ExtensionReadyDigest(); err != nil {
 		return fmt.Errorf("extension artifact not ready: %w", err)
 	}
 	return nil
@@ -139,7 +182,9 @@ func (rp *ruleSetProvider) Update() error {
 	return err
 }
 
-func (rp *ruleSetProvider) MarshalJSON() ([]byte, error) {
+func (rp *RuleSetProvider) MarshalJSON() ([]byte, error) {
+	rp.readyMu.RLock()
+	defer rp.readyMu.RUnlock()
 	return json.Marshal(
 		providerForApi{
 			Behavior:    rp.behavior.String(),
@@ -165,52 +210,75 @@ func NewRuleSetProvider(name string, behavior P.RuleBehavior, format P.RuleForma
 		format: format,
 	}
 
-	onUpdate := func(strategy ruleStrategy) {
-		rp.strategy = strategy
-		tunnel.RuleUpdateCallback().Emit(rp)
+	var wrapper *RuleSetProvider
+	onUpdate := func(loaded loadedRuleStrategy) {
+		wrapper.readyMu.Lock()
+		rp.strategy = loaded.strategy
+		wrapper.readyDigest = loaded.digest
+		wrapper.readyMu.Unlock()
+		tunnel.RuleUpdateCallback().Emit(P.RuleUpdate{Name: rp.Name(), Strategy: loaded.strategy})
 	}
 
 	rp.strategy = newStrategy(behavior, parse)
 	if len(payload) > 0 { // using as fallback rules
 		rp.strategy = rulesParseInline(payload, rp.strategy)
 	}
-	rp.Fetcher = resource.NewFetcher(name, interval, vehicle, bundleFile, func(bytes []byte) (ruleStrategy, error) {
+	rp.Fetcher = resource.NewFetcher(name, interval, vehicle, bundleFile, func(bytes []byte) (loadedRuleStrategy, error) {
 		// Memory-constrained builds (the iOS Network Extension) try the
 		// pre-computed MRS sidecar first: building the matcher from raw text is
 		// what spikes the footprint, and the sidecar skips that entirely while
 		// keeping every rule in a successfully loaded artifact. Startup admission
 		// and total process memory safety must be enforced by the caller.
 		var sidecarErr error
+		var sidecarSnapshot []byte
 		if maxLowMemoryRuleCount > 0 && format != P.MrsRule {
-			strategy, err := loadFromSidecar(sidecarPath(vehicle.Path()), bytes, behavior)
-			if err == nil {
-				log.Infoln("[Provider] %s loaded %d rules from MRS sidecar (skipped trie build)", name, strategy.Count())
-				return strategy, nil
+			sidecarSnapshot, sidecarErr = os.ReadFile(sidecarPath(vehicle.Path()))
+			if sidecarErr == nil {
+				strategy, err := loadFromSidecarBytes(sidecarSnapshot, bytes, behavior)
+				if err == nil {
+					log.Infoln("[Provider] %s loaded %d rules from MRS sidecar (skipped trie build)", name, strategy.Count())
+					return loadedRuleStrategy{
+						strategy: strategy,
+						digest:   extensionReadyDigest(behavior, format, strategy.Count(), bytes, sidecarSnapshot),
+					}, nil
+				}
+				sidecarErr = err
 			}
 			// Only fall back when the full raw matcher fits the build budget.
 			// A parse error must retain the previous active strategy, not publish
 			// a partial matcher. Initial failures require caller admission control.
-			sidecarErr = err
-			log.Debugln("[Provider] %s sidecar unavailable: %v", name, err)
+			log.Debugln("[Provider] %s sidecar unavailable: %v", name, sidecarErr)
 		}
 
 		strategy, err := rulesParse(bytes, newStrategy(behavior, parse), format)
 		if err != nil {
 			if sidecarErr != nil {
-				return nil, fmt.Errorf("%s rules: %w; prepared sidecar: %v; prepare in app (large classical has no safe MRS representation)", behavior, err, sidecarErr)
+				return loadedRuleStrategy{}, fmt.Errorf("%s rules: %w; prepared sidecar: %v; prepare in app (large classical has no safe MRS representation)", behavior, err, sidecarErr)
 			}
-			return nil, err
+			return loadedRuleStrategy{}, err
 		}
 		// On unconstrained builds, persist the finished bitmap so the extension
 		// can load it next time without paying the build cost.
 		if maxLowMemoryRuleCount == 0 && format != P.MrsRule {
 			writeSidecar(vehicle.Path(), bytes, behavior, strategy)
+			if strategy.Count() > extensionRawRuleBudget && behavior != P.Classical {
+				sidecarSnapshot, err = os.ReadFile(sidecarPath(vehicle.Path()))
+				if err != nil {
+					return loadedRuleStrategy{}, fmt.Errorf("extension artifact not ready: %w", err)
+				}
+				if _, err = loadFromSidecarBytes(sidecarSnapshot, bytes, behavior); err != nil {
+					return loadedRuleStrategy{}, fmt.Errorf("extension artifact not ready: %w", err)
+				}
+			}
 		}
-		return strategy, nil
+		return loadedRuleStrategy{
+			strategy: strategy,
+			digest:   extensionReadyDigest(behavior, format, strategy.Count(), bytes, sidecarSnapshot),
+		}, nil
 	}, onUpdate)
 
-	wrapper := &RuleSetProvider{
-		rp,
+	wrapper = &RuleSetProvider{
+		ruleSetProvider: rp,
 	}
 
 	runtime.SetFinalizer(wrapper, (*RuleSetProvider).Close)
@@ -372,6 +440,16 @@ type inlineProvider struct {
 
 func (i *inlineProvider) Name() string {
 	return i.name
+}
+
+func (i *InlineProvider) ExtensionReadyDigest() (string, error) {
+	h := sha256.New()
+	fmt.Fprintf(h, "rule-ready-v1\x00%s\x00inline\x00%d\x00", i.behavior.String(), i.Count())
+	for _, rule := range i.payload {
+		h.Write([]byte(rule))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func (i *inlineProvider) Initial() error {

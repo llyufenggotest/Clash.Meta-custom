@@ -2,8 +2,9 @@ package executor
 
 import (
 	"fmt"
-	P "github.com/metacubex/mihomo/constant/provider"
 	"sort"
+
+	P "github.com/metacubex/mihomo/constant/provider"
 )
 
 // Preflight is synchronous and sequential: never run with empty providers and
@@ -16,32 +17,34 @@ func preflightRuleProviders(providers map[string]P.RuleProvider, localOnly bool)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		pv := providers[name]
+		provider := providers[name]
 		var err error
 		if localOnly {
-			if local, ok := pv.(interface{ InitialLocal() error }); ok {
-				err = local.InitialLocal()
-			} else if pv.VehicleType() == P.Inline {
-				err = pv.Initial()
+			if initial, ok := provider.(interface{ InitialLocal() error }); ok {
+				err = initial.InitialLocal()
 			} else {
-				err = fmt.Errorf("provider does not support local preflight; prepare in app")
+				err = fmt.Errorf("provider does not support local-only initialization")
 			}
 		} else {
-			err = pv.Initial()
-			if err == nil {
-				if prepared, ok := pv.(interface{ ValidateForExtension() error }); ok {
-					err = prepared.ValidateForExtension()
-				}
+			err = provider.Initial()
+		}
+		if err == nil {
+			if validator, ok := provider.(interface{ ValidateForExtension() error }); ok {
+				err = validator.ValidateForExtension()
 			}
 		}
 		if err != nil {
-			for _, p := range providers {
-				if closer, ok := p.(interface{ Close() error }); ok {
-					_ = closer.Close()
-				}
-			}
+			closeRuleProviders(providers)
 			return fmt.Errorf("rule provider %q preflight failed: %w", name, err)
 		}
 	}
 	return nil
+}
+
+func closeRuleProviders(providers map[string]P.RuleProvider) {
+	for _, provider := range providers {
+		if closer, ok := provider.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+	}
 }

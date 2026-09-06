@@ -152,10 +152,15 @@ type RuleWrapper interface {
 	Unwrap() Rule
 }
 
+type RuleProviderMatcher interface {
+	Match(metadata *Metadata, helper RuleMatchHelper) bool
+}
+
 type RuleMatchHelper struct {
-	ResolveIP     func()
-	FindProcess   func()
-	CheckPassRule func(adapterName string) bool
+	ResolveIP          func()
+	FindProcess        func()
+	CheckPassRule      func(adapterName string) bool
+	LookupRuleProvider func(name string) (RuleProviderMatcher, bool)
 }
 
 type RuleGroup interface {

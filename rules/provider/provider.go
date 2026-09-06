@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/metacubex/mihomo/common/yaml"
 	"github.com/metacubex/mihomo/component/resource"
 	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/constant/features"
 	P "github.com/metacubex/mihomo/constant/provider"
 	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/rules/common"
@@ -105,6 +107,33 @@ func (rp *ruleSetProvider) Initial() error {
 	return err
 }
 
+func (rp *ruleSetProvider) InitialLocal() error {
+	_, err := rp.Fetcher.InitialLocal()
+	return err
+}
+
+const extensionRawRuleBudget = 10000
+
+// ValidateForExtension runs in Runner after Initial has rebuilt missing/legacy
+// sidecars. A warning-only write failure must not be reported as readiness.
+func (rp *RuleSetProvider) ValidateForExtension() error {
+	if rp.format == P.MrsRule || rp.Count() <= extensionRawRuleBudget {
+		return nil
+	}
+	if rp.behavior == P.Classical {
+		return fmt.Errorf("%w: classical provider has %d rules, exceeds %d-rule extension budget; classical has no safe MRS representation", ErrRuleSetTooLarge, rp.Count(), extensionRawRuleBudget)
+	}
+	source, err := os.ReadFile(rp.Vehicle().Path())
+	if err != nil {
+		return err
+	}
+	_, err = loadFromSidecar(sidecarPath(rp.Vehicle().Path()), source, rp.behavior)
+	if err != nil {
+		return fmt.Errorf("extension artifact not ready: %w", err)
+	}
+	return nil
+}
+
 func (rp *ruleSetProvider) Update() error {
 	_, _, err := rp.Fetcher.Update()
 	return err
@@ -149,31 +178,33 @@ func NewRuleSetProvider(name string, behavior P.RuleBehavior, format P.RuleForma
 		// Memory-constrained builds (the iOS Network Extension) try the
 		// pre-computed MRS sidecar first: building the matcher from raw text is
 		// what spikes the footprint, and the sidecar skips that entirely while
-		// keeping every rule. See mrs_sidecar.go for the measurements.
+		// keeping every rule in a successfully loaded artifact. Startup admission
+		// and total process memory safety must be enforced by the caller.
+		var sidecarErr error
 		if maxLowMemoryRuleCount > 0 && format != P.MrsRule {
-			if path, ok := sidecarUsable(vehicle.Path()); ok {
-				strategy, err := loadFromSidecar(path, behavior)
-				if err == nil {
-					log.Infoln(
-						"[Provider] %s loaded %d rules from MRS sidecar (skipped trie build)",
-						name, strategy.Count(),
-					)
-					return strategy, nil
-				}
-				// A corrupt or mismatched sidecar must not be fatal: fall
-				// through to the raw path, which may still fit the budget.
-				log.Warnln("[Provider] %s sidecar unusable, falling back: %v", name, err)
+			strategy, err := loadFromSidecar(sidecarPath(vehicle.Path()), bytes, behavior)
+			if err == nil {
+				log.Infoln("[Provider] %s loaded %d rules from MRS sidecar (skipped trie build)", name, strategy.Count())
+				return strategy, nil
 			}
+			// Only fall back when the full raw matcher fits the build budget.
+			// A parse error must retain the previous active strategy, not publish
+			// a partial matcher. Initial failures require caller admission control.
+			sidecarErr = err
+			log.Debugln("[Provider] %s sidecar unavailable: %v", name, err)
 		}
 
 		strategy, err := rulesParse(bytes, newStrategy(behavior, parse), format)
 		if err != nil {
+			if sidecarErr != nil {
+				return nil, fmt.Errorf("%s rules: %w; prepared sidecar: %v; prepare in app (large classical has no safe MRS representation)", behavior, err, sidecarErr)
+			}
 			return nil, err
 		}
 		// On unconstrained builds, persist the finished bitmap so the extension
 		// can load it next time without paying the build cost.
 		if maxLowMemoryRuleCount == 0 && format != P.MrsRule {
-			writeSidecar(vehicle.Path(), behavior, strategy)
+			writeSidecar(vehicle.Path(), bytes, behavior, strategy)
 		}
 		return strategy, nil
 	}, onUpdate)
@@ -207,8 +238,7 @@ var (
 	ErrInvalidFormat = errors.New("invalid format")
 
 	// ErrRuleSetTooLarge is returned when a rule set exceeds the low-memory
-	// build's budget. It is a load failure for that one provider, not a config
-	// error: the caller logs it and carries on with the remaining rule sets.
+	// build's budget. Startup callers must propagate it and refuse activation.
 	ErrRuleSetTooLarge = errors.New("rule set too large for this build")
 )
 
@@ -334,9 +364,10 @@ type InlineProvider struct {
 
 type inlineProvider struct {
 	baseProvider
-	name     string
-	updateAt time.Time
-	payload  []string
+	name       string
+	updateAt   time.Time
+	payload    []string
+	initialErr error
 }
 
 func (i *inlineProvider) Name() string {
@@ -344,7 +375,7 @@ func (i *inlineProvider) Name() string {
 }
 
 func (i *inlineProvider) Initial() error {
-	return nil
+	return i.initialErr
 }
 
 func (i *inlineProvider) Update() error {
@@ -380,7 +411,16 @@ func NewInlineProvider(name string, behavior P.RuleBehavior, payload []string, p
 		name:     name,
 		updateAt: time.Now(),
 	}
-	ip.strategy = rulesParseInline(payload, ip.strategy)
+	// Inline has no file-backed sidecar; guard before matcher construction.
+	budget := maxLowMemoryRuleCount
+	if features.IOS {
+		budget = extensionRawRuleBudget
+	}
+	if budget > 0 && len(payload) > budget {
+		ip.initialErr = fmt.Errorf("%w: inline provider has %d entries, exceeds %d-rule extension budget; no prepared artifact", ErrRuleSetTooLarge, len(payload), budget)
+	} else {
+		ip.strategy = rulesParseInline(payload, ip.strategy)
+	}
 
 	wrapper := &InlineProvider{
 		ip,

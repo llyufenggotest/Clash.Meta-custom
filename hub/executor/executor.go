@@ -82,9 +82,16 @@ func ParseWithBytes(buf []byte) (*config.Config, error) {
 }
 
 // ApplyConfig dispatch configure to all parts without ExternalController
-func ApplyConfig(cfg *config.Config, force bool) {
+func ApplyConfig(cfg *config.Config, force bool) error {
 	mux.Lock()
 	defer mux.Unlock()
+	// Admission happens before publishing rules or changing the active tunnel.
+	// Runner prepares artifacts; the extension only admits locally ready rules.
+	if features.IOS || features.WithLowMemory {
+		if err := preflightRuleProviders(cfg.RuleProviders, features.WithLowMemory); err != nil {
+			return err
+		}
+	}
 	log.SetLevel(cfg.General.LogLevel)
 
 	tunnel.OnSuspend()
@@ -116,7 +123,9 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	loadProvider(cfg.Providers)
 	wireFastNodeCache()
 	updateProfile(cfg)
-	loadRuleProviders(cfg.RuleProviders)
+	if !features.IOS && !features.WithLowMemory {
+		loadRuleProviders(cfg.RuleProviders)
+	}
 	runtime.GC()
 	tunnel.OnRunning()
 	if !features.WithLowMemory {
@@ -124,6 +133,7 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	}
 
 	resolver.ResetConnection()
+	return nil
 }
 
 func initInnerTcp() {
@@ -319,35 +329,10 @@ func updateRules(rules []C.Rule, subRules map[string][]C.Rule, ruleProviders map
 	tunnel.UpdateRules(rules, subRules, ruleProviders)
 }
 
-// loadRuleProviders initialises remote rule lists. On platforms where the caller
-// holds a lock that the data path also needs, the first fetch must not block:
-// see the deferRuleProviderInitial build variants.
-//
-// Device evidence (iOS, 2026-08-29): 24 remote rule providers each failed DNS
-// resolution because the tunnel was not up yet, and the whole config apply sat
-// for 24-25 s waiting for them. In FlClash the iOS core holds `runLock` across
-// applyConfig, and startTUN needs the same lock, so the TUN data path could not
-// come up until every provider had timed out. The providers cannot resolve
-// before the tunnel exists, and the tunnel cannot exist until they finish: a
-// chicken-and-egg stall the user sees as "connected but no network".
-//
-// Deferring the first fetch inverts the dependency: TUN comes up immediately and
-// the providers fetch through the tunnel that now exists. Rules are briefly
-// empty, so early traffic falls through to the catch-all rule; that is strictly
-// better than having no data path at all.
+// Non-iOS unconstrained builds retain their existing provider loading policy.
+// iOS/low-memory builds use local admission before any tunnel mutation.
 func loadRuleProviders[T P.Provider](providers map[string]T) {
-	if !deferRuleProviderInitial {
-		loadProvider(providers)
-		return
-	}
-	if len(providers) == 0 {
-		return
-	}
-	log.Infoln(
-		"Deferring initial fetch of %d rule providers until the data path is up",
-		len(providers),
-	)
-	go loadProvider(providers)
+	loadProvider(providers)
 }
 
 func loadProvider[T P.Provider](providers map[string]T) {

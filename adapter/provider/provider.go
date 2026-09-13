@@ -394,6 +394,11 @@ func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilt
 		}
 
 		proxies := []C.Proxy{}
+		closeOnError := func() {
+			for _, proxy := range proxies {
+				_ = proxy.Close()
+			}
+		}
 		proxiesSet := map[string]struct{}{}
 		for _, filterReg := range filterRegs {
 		LOOP1:
@@ -443,11 +448,13 @@ func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilt
 
 				err := override.Apply(mapping)
 				if err != nil {
+					closeOnError()
 					return nil, fmt.Errorf("proxy %d override error: %w", idx, err)
 				}
 
 				proxy, err := adapter.ParseProxy(mapping, adapter.WithTunnelForAPI(tunnel), adapter.WithProviderName(pdName))
 				if err != nil {
+					closeOnError()
 					return nil, fmt.Errorf("proxy %d error: %w", idx, err)
 				}
 

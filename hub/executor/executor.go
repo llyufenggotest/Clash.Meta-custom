@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/netip"
@@ -14,6 +15,7 @@ import (
 	"github.com/metacubex/mihomo/adapter"
 	"github.com/metacubex/mihomo/adapter/inbound"
 	"github.com/metacubex/mihomo/adapter/outboundgroup"
+	AP "github.com/metacubex/mihomo/adapter/provider"
 	"github.com/metacubex/mihomo/component/auth"
 	"github.com/metacubex/mihomo/component/ca"
 	"github.com/metacubex/mihomo/component/dialer"
@@ -88,6 +90,12 @@ func ParseWithBytes(buf []byte) (*config.Config, error) {
 // metadata only and cannot redirect writes.
 func PrepareRuleProvider(name string, definition map[string]any, targetPath string) (RP.PreparedRuleProvider, error) {
 	return RP.PrepareRuleProvider(name, definition, targetPath, R.ParseRule)
+}
+
+// PrepareProxyProvider performs one bounded, cancellable proxy-provider fetch
+// and parse, publishing only the validated bytes to caller-owned staging.
+func PrepareProxyProvider(ctx context.Context, name string, definition map[string]any, targetPath string, trustedRoot string, timeout time.Duration) (AP.PreparedProxyProvider, error) {
+	return AP.PrepareProxyProvider(ctx, name, definition, targetPath, trustedRoot, timeout)
 }
 
 // ApplyConfig dispatch configure to all parts without ExternalController

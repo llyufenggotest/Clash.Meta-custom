@@ -24,6 +24,10 @@ type BundleFile func() (fs.File, error)
 type Fetcher[V any] struct {
 	ctx          context.Context
 	ctxCancel    context.CancelFunc
+	closeOnce    sync.Once
+	lifecycleMu sync.Mutex
+	closed       bool
+	started      bool
 	resourceType string
 	name         string
 	vehicle      P.Vehicle
@@ -132,7 +136,14 @@ func (f *Fetcher[V]) Initial() (V, error) {
 }
 
 func (f *Fetcher[V]) Update() (V, bool, error) {
-	buf, hash, err := f.vehicle.Read(f.ctx, f.hash)
+	f.lifecycleMu.Lock()
+	if f.closed {
+		f.lifecycleMu.Unlock()
+		return lo.Empty[V](), false, context.Canceled
+	}
+	ctx := f.ctx
+	f.lifecycleMu.Unlock()
+	buf, hash, err := f.vehicle.Read(ctx, f.hash)
 	if err != nil {
 		f.backoff.AddAttempt() // add a failed attempt to backoff
 		return lo.Empty[V](), false, err
@@ -147,6 +158,12 @@ func (f *Fetcher[V]) SideUpdate(buf []byte) (V, bool, error) {
 func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (V, bool, error) {
 	f.loadBufMutex.Lock()
 	defer f.loadBufMutex.Unlock()
+
+	f.lifecycleMu.Lock()
+	defer f.lifecycleMu.Unlock()
+	if f.closed {
+		return lo.Empty[V](), false, context.Canceled
+	}
 
 	now := time.Now()
 	if f.hash.Equal(hash) {
@@ -185,10 +202,16 @@ func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (
 }
 
 func (f *Fetcher[V]) Close() error {
-	f.ctxCancel()
-	if f.watcher != nil {
-		_ = f.watcher.Close()
-	}
+	f.closeOnce.Do(func() {
+		f.lifecycleMu.Lock()
+		f.closed = true
+		f.ctxCancel()
+		if f.watcher != nil {
+			_ = f.watcher.Close()
+			f.watcher = nil
+		}
+		f.lifecycleMu.Unlock()
+	})
 	return nil
 }
 
@@ -228,23 +251,37 @@ func (f *Fetcher[V]) pullLoop(forceUpdate bool) {
 }
 
 func (f *Fetcher[V]) startPullLoop(forceUpdate bool) (err error) {
+	f.lifecycleMu.Lock()
+	defer f.lifecycleMu.Unlock()
+	if f.closed || f.ctx.Err() != nil {
+		return context.Canceled
+	}
+	if f.started {
+		return nil
+	}
+
 	// pull contents automatically
 	if f.vehicle.Type() == P.File {
-		f.watcher, err = fswatch.NewWatcher(fswatch.Options{
+		watcher, watcherErr := fswatch.NewWatcher(fswatch.Options{
 			Path:     []string{f.vehicle.Path()},
 			Callback: f.updateCallback,
 		})
-		if err != nil {
+		if watcherErr != nil {
+			return watcherErr
+		}
+		if err = watcher.Start(); err != nil {
+			_ = watcher.Close()
 			return err
 		}
-		err = f.watcher.Start()
-		if err != nil {
-			return err
-		}
+		f.watcher = watcher
+		f.started = true
 	} else if f.interval > 0 {
+		f.started = true
 		go f.pullLoop(forceUpdate)
+	} else {
+		f.started = true
 	}
-	return
+	return nil
 }
 
 func (f *Fetcher[V]) updateCallback(path string) {

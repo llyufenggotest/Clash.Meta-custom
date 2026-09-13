@@ -371,14 +371,12 @@ func loadProvider[T P.Provider](providers map[string]T) {
 		}
 	}
 
-	wg := sync.WaitGroup{}
 	ch := make(chan struct{}, concurrentCount)
 	for _, pv := range providers {
 		pv := pv
-		wg.Add(1)
 		ch <- struct{}{}
 		go func() {
-			defer func() { <-ch; wg.Done() }()
+			defer func() { <-ch }()
 			load(pv)
 		}()
 	}

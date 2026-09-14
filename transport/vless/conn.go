@@ -1,6 +1,8 @@
 package vless
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -22,6 +24,7 @@ type Conn struct {
 	received bool
 	sent     bool
 	isX365   bool // ✨新增
+	isJuzi   bool
 }
 
 func (vc *Conn) Read(b []byte) (int, error) {
@@ -85,7 +88,7 @@ func (vc *Conn) sendRequest(p []byte) (err error) {
 		defer buffer.Release()
 
 		buf.Must(buf.Error(buffer.Write([]byte{'X', '3', '6', '5', 0x01})))
-		
+
 		if vc.dst.Mux {
 			buf.Must(buffer.WriteByte(CommandMux))
 		} else {
@@ -121,7 +124,10 @@ func (vc *Conn) sendRequest(p []byte) (err error) {
 
 	requestLen := 1  // protocol version
 	requestLen += 16 // UUID
-	requestLen += 1  // addons length
+	if vc.isJuzi {
+		requestLen += 8
+	}
+	requestLen += 1 // addons length
 	requestLen += len(addonsBytes)
 	requestLen += 1 // command
 	if !vc.dst.Mux {
@@ -137,6 +143,14 @@ func (vc *Conn) sendRequest(p []byte) (err error) {
 	buf.Must(
 		buffer.WriteByte(Version),              // protocol version
 		buf.Error(buffer.Write(vc.id.Bytes())), // 16 bytes of uuid
+	)
+	if vc.isJuzi {
+		mac := hmac.New(sha256.New, []byte("hello_pidun"))
+		_, _ = mac.Write([]byte{Version})
+		_, _ = mac.Write(vc.id[:])
+		buf.Must(buf.Error(buffer.Write(mac.Sum(nil)[:8])))
+	}
+	buf.Must(
 		buffer.WriteByte(byte(len(addonsBytes))),
 		buf.Error(buffer.Write(addonsBytes)),
 	)
@@ -220,6 +234,7 @@ func newConn(conn net.Conn, client *Client, dst *DstAddr) (net.Conn, error) {
 		addons:       client.Addons,
 		dst:          dst,
 		isX365:       client.IsX365, // ✨赋值
+		isJuzi:       client.mode == ModeJuzi,
 	}
 
 	if client.Addons != nil {

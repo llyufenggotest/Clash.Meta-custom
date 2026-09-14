@@ -522,7 +522,7 @@ func NewVless(option VlessOption) (*Vless, error) {
 		option.PacketAddr = true
 		option.XUDP = false
 	default: // https://github.com/XTLS/Xray-core/pull/1567#issuecomment-1407305458
-		if !option.PacketAddr {
+		if !option.PacketAddr && !pure {
 			option.XUDP = true
 		}
 	}

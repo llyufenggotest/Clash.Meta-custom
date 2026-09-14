@@ -54,6 +54,7 @@ type Vless struct {
 	restlsConfig    *restls.Config
 	jlsConfig       *jls.Config
 	realityConfig   *tlsC.RealityConfig
+	pure            bool
 }
 
 type VlessOption struct {
@@ -207,6 +208,8 @@ func (v *Vless) StreamConnContext(ctx context.Context, c net.Conn, metadata *C.M
 						ServerName:         serverName,
 						InsecureSkipVerify: v.option.SkipCertVerify,
 						NextProtos:         []string{"http/1.1"},
+						MinVersion:         lo.Ternary(v.pure, uint16(tls.VersionTLS13), uint16(0)),
+						MaxVersion:         lo.Ternary(v.pure, uint16(tls.VersionTLS13), uint16(0)),
 					},
 					Fingerprint:    v.option.Fingerprint,
 					NameCertVerify: v.option.NameCertVerify,
@@ -460,9 +463,41 @@ func parseVlessAddr(metadata *C.Metadata, xudp bool) *vless.DstAddr {
 	}
 }
 
+func configurePureVless(option *VlessOption) (bool, error) {
+	lower := strings.ToLower(option.UUID)
+	if !strings.Contains(lower, "#pure") {
+		return false, nil
+	}
+	if !strings.HasSuffix(lower, "#pure") {
+		return true, errors.New("Pure: invalid or mixed suffix")
+	}
+	if option.Flow != "" || (option.Encryption != "" && option.Encryption != "none") || option.UDP || option.PacketAddr || option.XUDP || option.PacketEncoding != "" {
+		return true, errors.New("Pure: flow, encryption, UDP/XUDP and packet encoding unsupported")
+	}
+	if !option.TLS || option.Network != "ws" {
+		return true, errors.New("Pure: requires TLS WebSocket transport")
+	}
+	if option.ClientFingerprint != "" || option.ECHOpts.Enable || option.RealityOpts.PublicKey != "" || option.ShadowTLSOpts.Password != "" || option.ShadowTLSOpts.Version != 0 || option.RestlsOpts.Password != "" || option.RestlsOpts.VersionHint != "" || option.RestlsOpts.RestlsScript != "" || option.JLSOpts.Username != "" || option.JLSOpts.Password != "" {
+		return true, errors.New("Pure: Reality, uTLS, ECH and alternate TLS engines unsupported")
+	}
+	if len(option.ALPN) > 0 && (len(option.ALPN) != 1 || option.ALPN[0] != "http/1.1") {
+		return true, errors.New("Pure: requires ALPN http/1.1")
+	}
+	if option.WSOpts.MaxEarlyData != 0 || option.WSOpts.EarlyDataHeaderName != "" || option.WSOpts.V2rayHttpUpgrade || option.WSOpts.V2rayHttpUpgradeFastOpen || len(option.WSOpts.Headers) != 0 || len(option.WSHeaders) != 0 || (option.WSOpts.Path != "" && option.WSOpts.Path != "/websocket") {
+		return true, errors.New("Pure: early data and custom WebSocket options unsupported")
+	}
+	option.ALPN = []string{"http/1.1"}
+	option.WSOpts.Path = "/websocket"
+	return true, nil
+}
+
 func NewVless(option VlessOption) (*Vless, error) {
 	// 🚀 清除首尾空格
 	option.UUID = strings.TrimSpace(option.UUID)
+	pure, err := configurePureVless(&option)
+	if err != nil {
+		return nil, err
+	}
 
 	// ================= [x365 custom protocol detection] =================
 	isX365 := false
@@ -508,8 +543,8 @@ func NewVless(option VlessOption) (*Vless, error) {
 			Addr:         net.JoinHostPort(option.Server, strconv.Itoa(option.Port)),
 			Type:         C.Vless,
 			ProviderName: option.ProviderName,
-			UDP:          option.UDP,
-			XUDP:         option.XUDP,
+			UDP:          option.UDP && !pure,
+			XUDP:         option.XUDP && !pure,
 			TFO:          option.TFO,
 			MPTCP:        option.MPTCP,
 			Interface:    option.Interface,
@@ -518,6 +553,7 @@ func NewVless(option VlessOption) (*Vless, error) {
 		}),
 		client: client,
 		option: &option,
+		pure:   pure,
 	}
 	v.dialer = option.NewDialer(v.DialOptions())
 

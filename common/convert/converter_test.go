@@ -193,6 +193,23 @@ func TestConvertsV2RayPureVlessPreservesEncodedSuffix(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestConvertsV2RayPureVlessRejectsCustomHostHeader(t *testing.T) {
+	link := "vless://00112233-4455-6677-8899-aabbccddeeff%23pure@example.com:443?encryption=none&security=tls&type=ws&path=%2Fwebsocket&host=custom.example#Pure"
+
+	proxies, err := ConvertsV2Ray([]byte(link))
+	if err != nil || len(proxies) != 1 {
+		t.Fatalf("unexpected conversion: proxies=%#v err=%v", proxies, err)
+	}
+	wsOpts, ok := proxies[0]["ws-opts"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing ws-opts: %#v", proxies[0])
+	}
+	headers, ok := wsOpts["headers"].(map[string]any)
+	if !ok || headers["Host"] != "custom.example" {
+		t.Fatalf("Pure converter must preserve a requested custom Host for rejection: %#v", wsOpts)
+	}
+}
+
 func TestConvertsV2RayVlessRealityVisionTCPWithoutHeaderType(t *testing.T) {
 	vlessTest := "vless://a1b2c3d4-eacc-4433-981b-7e5f9a8b@142.98.76.54:34888?encryption=none&security=reality&type=tcp&sni=github.io&fp=chrome&pbk=ppQ9FwLrLIa0AOrp1WvcyiaQ37vg2WSy_CD4bIdiTUw&sid=6ba85179f3a2b4c5&flow=xtls-rprx-vision#My-VLESS-Reality-Vision"
 

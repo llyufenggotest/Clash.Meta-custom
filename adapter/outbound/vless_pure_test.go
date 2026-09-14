@@ -21,6 +21,20 @@ func TestConfigurePureVlessCanonicalizesTransport(t *testing.T) {
 	}
 }
 
+func TestNewPureVlessKeepsXUDPDisabled(t *testing.T) {
+	o := pureOption()
+	o.Name = "pure"
+	o.Server = "example.com"
+	o.Port = 443
+	v, err := NewVless(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.option.XUDP || v.option.PacketAddr || v.SupportUDP() {
+		t.Fatalf("Pure packet modes enabled: option=%#v", v.option)
+	}
+}
+
 func TestConfigurePureVlessRejectsUnsupportedCombinations(t *testing.T) {
 	cases := map[string]func(*VlessOption){
 		"udp":        func(o *VlessOption) { o.UDP = true },

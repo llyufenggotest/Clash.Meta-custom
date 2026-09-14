@@ -234,7 +234,7 @@ func NewRuleSetProvider(name string, behavior P.RuleBehavior, format P.RuleForma
 		if maxLowMemoryRuleCount > 0 && format != P.MrsRule {
 			sidecarSnapshot, sidecarErr = os.ReadFile(sidecarPath(vehicle.Path()))
 			if sidecarErr == nil {
-				strategy, err := loadFromSidecarBytes(sidecarSnapshot, bytes, behavior)
+				strategy, err := loadFromSidecarBytes(sidecarSnapshot, bytes, behavior, format)
 				if err == nil {
 					log.Infoln("[Provider] %s loaded %d rules from MRS sidecar (skipped trie build)", name, strategy.Count())
 					return loadedRuleStrategy{
@@ -260,13 +260,13 @@ func NewRuleSetProvider(name string, behavior P.RuleBehavior, format P.RuleForma
 		// On unconstrained builds, persist the finished bitmap so the extension
 		// can load it next time without paying the build cost.
 		if maxLowMemoryRuleCount == 0 && format != P.MrsRule {
-			writeSidecar(vehicle.Path(), bytes, behavior, strategy)
+			writeSidecar(vehicle.Path(), bytes, behavior, format, strategy)
 			if strategy.Count() > extensionRawRuleBudget && behavior != P.Classical {
 				sidecarSnapshot, err = os.ReadFile(sidecarPath(vehicle.Path()))
 				if err != nil {
 					return loadedRuleStrategy{}, fmt.Errorf("extension artifact not ready: %w", err)
 				}
-				if _, err = loadFromSidecarBytes(sidecarSnapshot, bytes, behavior); err != nil {
+				if _, err = loadFromSidecarBytes(sidecarSnapshot, bytes, behavior, format); err != nil {
 					return loadedRuleStrategy{}, fmt.Errorf("extension artifact not ready: %w", err)
 				}
 			}

@@ -66,13 +66,13 @@ func TestSidecarRoundTripsEveryRule(t *testing.T) {
 	path := writeDomainList(t, dir, "big.yaml", n)
 
 	built := buildOversizedStrategy(t, n)
-	writeSidecar(path, readSource(t, path), P.Domain, built)
+	writeSidecar(path, readSource(t, path), P.Domain, P.YamlRule, built)
 
 	scPath, ok := testSidecarUsable(t, path)
 	if !ok {
 		t.Fatal("sidecar should exist and be usable right after writing")
 	}
-	loaded, err := loadFromSidecar(scPath, readSource(t, path), P.Domain)
+	loaded, err := loadFromSidecar(scPath, readSource(t, path), P.Domain, P.YamlRule)
 	if err != nil {
 		t.Fatalf("load sidecar: %v", err)
 	}
@@ -112,12 +112,12 @@ func TestCappedBuildLoadsOversizedListFromSidecar(t *testing.T) {
 		t.Fatal("capped build must refuse to build this list from raw text")
 	}
 
-	writeSidecar(path, raw, P.Domain, buildOversizedStrategy(t, n))
+	writeSidecar(path, raw, P.Domain, P.YamlRule, buildOversizedStrategy(t, n))
 	scPath, ok := testSidecarUsable(t, path)
 	if !ok {
 		t.Fatal("sidecar should be usable")
 	}
-	loaded, err := loadFromSidecar(scPath, readSource(t, path), P.Domain)
+	loaded, err := loadFromSidecar(scPath, readSource(t, path), P.Domain, P.YamlRule)
 	if err != nil {
 		t.Fatalf("capped build must load the sidecar it cannot build: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestCorruptSidecarErrors(t *testing.T) {
 	if err := os.WriteFile(sc, []byte("garbage, not zstd"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadFromSidecar(sc, readSource(t, path), P.Domain); err == nil {
+	if _, err := loadFromSidecar(sc, readSource(t, path), P.Domain, P.YamlRule); err == nil {
 		t.Error("a corrupt sidecar must return an error, not load silently")
 	}
 }
@@ -181,7 +181,7 @@ func TestSmallListsGetNoSidecar(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeSidecar(path, readSource(t, path), P.Domain, built)
+	writeSidecar(path, readSource(t, path), P.Domain, P.YamlRule, built)
 	if _, err := os.Stat(sidecarPath(path)); err == nil {
 		t.Errorf("a %d-rule list should not get a sidecar (threshold %d)", built.Count(), sidecarMinRules)
 	}

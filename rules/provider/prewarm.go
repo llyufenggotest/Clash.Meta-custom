@@ -26,7 +26,7 @@ type PreparedRuleProvider struct {
 }
 
 // PrepareRuleProvider parses one provider definition against caller-selected
-// immutable sourcePath and publishes a content-bound MRS-SC02 sidecar. It does
+// immutable sourcePath and publishes a content-bound MRS-SC03 sidecar. It does
 // not construct a Fetcher/provider, bind the tunnel, emit updates, start a file
 // watcher, or start an HTTP pull loop.
 func PrepareRuleProvider(name string, mapping map[string]any, sourcePath string, parse common.ParseRuleFunc) (PreparedRuleProvider, error) {
@@ -58,6 +58,17 @@ func PrepareRuleProvider(name string, mapping map[string]any, sourcePath string,
 	if err != nil {
 		return PreparedRuleProvider{}, err
 	}
+	sidecar := sidecarPath(sourcePath)
+	if cached, readErr := os.ReadFile(sidecar); readErr == nil {
+		if strategy, loadErr := loadFromSidecarBytes(cached, raw, behavior, format); loadErr == nil {
+			digest := extensionReadyDigest(behavior, format, strategy.Count(), raw, cached)
+			return PreparedRuleProvider{
+				Name: name, Path: sourcePath, Sidecar: sidecar,
+				Behavior: behavior.String(), Format: format.String(),
+				Count: strategy.Count(), Digest: digest,
+			}, nil
+		}
+	}
 	strategy, err := rulesParse(raw, newStrategy(behavior, parse), format)
 	if err != nil {
 		return PreparedRuleProvider{}, err
@@ -75,11 +86,12 @@ func PrepareRuleProvider(name string, mapping map[string]any, sourcePath string,
 	payloadHash := sha256.Sum256(payload.Bytes())
 	var envelope bytes.Buffer
 	envelope.WriteString(sidecarMagic)
+	envelope.WriteByte(byte(behavior))
+	envelope.WriteByte(byte(format))
 	envelope.Write(sourceHash[:])
 	envelope.Write(payloadHash[:])
 	envelope.Write(payload.Bytes())
 
-	sidecar := sidecarPath(sourcePath)
 	if err := publishPreparedSidecar(sidecar, envelope.Bytes()); err != nil {
 		return PreparedRuleProvider{}, err
 	}

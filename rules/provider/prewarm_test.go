@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	P "github.com/metacubex/mihomo/constant/provider"
 )
@@ -43,12 +44,79 @@ func TestPrepareRuleProviderBuildsSidecarWithoutTunnel(t *testing.T) {
 		}
 		t.Fatalf("sidecar prefix=%q", artifact[:prefixLen])
 	}
-	strategy, err := loadFromSidecarBytes(artifact, []byte("example.com\n.example.org\n"), P.Domain)
+	strategy, err := loadFromSidecarBytes(artifact, []byte("example.com\n.example.org\n"), P.Domain, P.TextRule)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strategy.Count() != 2 {
 		t.Fatalf("count=%d", strategy.Count())
+	}
+}
+
+func TestPrepareRuleProviderReusesValidSidecar(t *testing.T) {
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "rules.txt")
+	raw := []byte("example.com\n.example.org\n")
+	if err := os.WriteFile(sourcePath, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	first, err := PrepareRuleProvider("first", map[string]any{
+		"type": "file", "behavior": "domain", "format": "text",
+	}, sourcePath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached, err := os.ReadFile(first.Sidecar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(first.Sidecar, time.Unix(100, 0), time.Unix(100, 0)); err != nil {
+		t.Fatal(err)
+	}
+	second, err := PrepareRuleProvider("second", map[string]any{
+		"type": "file", "behavior": "domain", "format": "text",
+	}, sourcePath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, err := os.ReadFile(second.Sidecar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(second.Sidecar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(time.Unix(100, 0)) {
+		t.Fatalf("valid sidecar was rewritten: modtime=%v", info.ModTime())
+	}
+	if !bytes.Equal(actual, cached) || second.Count != first.Count || second.Digest != first.Digest {
+		t.Fatalf("sidecar was not reused: first=%+v second=%+v", first, second)
+	}
+}
+
+func TestPrepareRuleProviderRebuildsInvalidSidecar(t *testing.T) {
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "rules.txt")
+	raw := []byte("example.com\n.example.org\n")
+	if err := os.WriteFile(sourcePath, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sidecarPath(sourcePath), []byte("corrupt"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := PrepareRuleProvider("rebuilt", map[string]any{
+		"type": "file", "behavior": "domain", "format": "text",
+	}, sourcePath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := os.ReadFile(result.Sidecar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(artifact, []byte(sidecarMagic)) || result.Count != 2 {
+		t.Fatalf("invalid sidecar was not rebuilt: result=%+v", result)
 	}
 }
 

@@ -20,30 +20,36 @@ import (
 // the unconstrained app. Large raw/classical providers still require startup
 // admission control; the low-memory rule budget is not a completeness guarantee.
 const sidecarMinRules = 5000
-const sidecarMagic = "MRS-SC02"
-const sidecarHeaderSize = len(sidecarMagic) + 2*sha256.Size
+const sidecarMagic = "MRS-SC03"
+const sidecarMetadataSize = 2
+const sidecarHeaderSize = len(sidecarMagic) + sidecarMetadataSize + 2*sha256.Size
 
 func sidecarPath(vehiclePath string) string { return vehiclePath + ".mrs" }
 
 // loadFromSidecar reads once, so concurrent replacement cannot separate hash
 // validation from the payload used to construct the matcher.
-func loadFromSidecar(path string, source []byte, behavior P.RuleBehavior) (ruleStrategy, error) {
+func loadFromSidecar(path string, source []byte, behavior P.RuleBehavior, format P.RuleFormat) (ruleStrategy, error) {
 	buf, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	return loadFromSidecarBytes(buf, source, behavior)
+	return loadFromSidecarBytes(buf, source, behavior, format)
 }
 
-func loadFromSidecarBytes(buf, source []byte, behavior P.RuleBehavior) (ruleStrategy, error) {
+func loadFromSidecarBytes(buf, source []byte, behavior P.RuleBehavior, format P.RuleFormat) (ruleStrategy, error) {
 	if len(buf) < sidecarHeaderSize || string(buf[:len(sidecarMagic)]) != sidecarMagic {
 		return nil, fmt.Errorf("unversioned or truncated MRS sidecar; rebuild in app")
 	}
+	metadataStart := len(sidecarMagic)
+	if buf[metadataStart] != byte(behavior) || buf[metadataStart+1] != byte(format) {
+		return nil, fmt.Errorf("MRS sidecar parser semantics mismatch; rebuild in app")
+	}
+	hashStart := metadataStart + sidecarMetadataSize
 	sourceHash := sha256.Sum256(source)
 	payload := buf[sidecarHeaderSize:]
 	payloadHash := sha256.Sum256(payload)
-	if !bytes.Equal(buf[len(sidecarMagic):len(sidecarMagic)+sha256.Size], sourceHash[:]) ||
-		!bytes.Equal(buf[len(sidecarMagic)+sha256.Size:sidecarHeaderSize], payloadHash[:]) {
+	if !bytes.Equal(buf[hashStart:hashStart+sha256.Size], sourceHash[:]) ||
+		!bytes.Equal(buf[hashStart+sha256.Size:sidecarHeaderSize], payloadHash[:]) {
 		return nil, fmt.Errorf("MRS sidecar content hash mismatch; rebuild in app")
 	}
 	return rulesMrsParse(payload, newStrategy(behavior, nil))
@@ -51,7 +57,7 @@ func loadFromSidecarBytes(buf, source []byte, behavior P.RuleBehavior) (ruleStra
 
 // writeSidecar binds the bitmap to parser input, NOT the possibly older raw file.
 // Failure is a cache miss, never permission to drop rules or ignore a load error.
-func writeSidecar(vehiclePath string, source []byte, behavior P.RuleBehavior, strategy ruleStrategy) {
+func writeSidecar(vehiclePath string, source []byte, behavior P.RuleBehavior, format P.RuleFormat, strategy ruleStrategy) {
 	mrsStrategy, ok := strategy.(mrsRuleStrategy)
 	if !ok || strategy.Count() < sidecarMinRules {
 		return
@@ -65,6 +71,8 @@ func writeSidecar(vehiclePath string, source []byte, behavior P.RuleBehavior, st
 	payloadHash := sha256.Sum256(payload.Bytes())
 	var envelope bytes.Buffer
 	envelope.WriteString(sidecarMagic)
+	envelope.WriteByte(byte(behavior))
+	envelope.WriteByte(byte(format))
 	envelope.Write(sourceHash[:])
 	envelope.Write(payloadHash[:])
 	envelope.Write(payload.Bytes())

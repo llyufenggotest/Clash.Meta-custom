@@ -24,12 +24,12 @@ func readSource(t *testing.T, path string) []byte {
 }
 func testSidecarUsable(t *testing.T, path string) (string, bool) {
 	t.Helper()
-	_, err := loadFromSidecar(sidecarPath(path), readSource(t, path), P.Domain)
+	_, err := loadFromSidecar(sidecarPath(path), readSource(t, path), P.Domain, P.YamlRule)
 	return sidecarPath(path), err == nil
 }
 func TestSidecarSurvivesIdenticalRawTouch(t *testing.T) {
 	path := writeDomainList(t, t.TempDir(), "rules.yaml", 12000)
-	writeSidecar(path, readSource(t, path), P.Domain, buildOversizedStrategy(t, 12000))
+	writeSidecar(path, readSource(t, path), P.Domain, P.YamlRule, buildOversizedStrategy(t, 12000))
 	future := time.Now().Add(time.Hour)
 	if err := os.Chtimes(path, future, future); err != nil {
 		t.Fatal(err)
@@ -41,9 +41,9 @@ func TestSidecarSurvivesIdenticalRawTouch(t *testing.T) {
 func TestSidecarRejectsDifferentParserInput(t *testing.T) {
 	path := writeDomainList(t, t.TempDir(), "rules.yaml", 12000)
 	raw := readSource(t, path)
-	writeSidecar(path, raw, P.Domain, buildOversizedStrategy(t, 12000))
+	writeSidecar(path, raw, P.Domain, P.YamlRule, buildOversizedStrategy(t, 12000))
 	changed := []byte(strings.ReplaceAll(string(raw), "host", "newhost"))
-	if _, err := loadFromSidecar(sidecarPath(path), changed, P.Domain); err == nil {
+	if _, err := loadFromSidecar(sidecarPath(path), changed, P.Domain, P.YamlRule); err == nil {
 		t.Fatal("downloaded content must not load old sidecar while disk raw remains old")
 	}
 	// Even unchanged length and mtime cannot authorize different content.
@@ -62,11 +62,21 @@ func TestSidecarRejectsDifferentParserInput(t *testing.T) {
 		t.Fatal("same-size same-mtime changed source accepted")
 	}
 }
+func TestSidecarRejectsDifferentFormat(t *testing.T) {
+	dir := t.TempDir()
+	path := writeDomainList(t, dir, "rules.yaml", 12000)
+	raw := readSource(t, path)
+	writeSidecar(path, raw, P.Domain, P.YamlRule, buildOversizedStrategy(t, 12000))
+	if _, err := loadFromSidecar(sidecarPath(path), raw, P.Domain, P.TextRule); err == nil {
+		t.Fatal("sidecar built for yaml format accepted as text")
+	}
+}
+
 func TestSidecarRejectsPayloadCorruptionAndWrongBehavior(t *testing.T) {
 	path := writeDomainList(t, t.TempDir(), "rules.yaml", 12000)
 	raw := readSource(t, path)
-	writeSidecar(path, raw, P.Domain, buildOversizedStrategy(t, 12000))
-	if _, err := loadFromSidecar(sidecarPath(path), raw, P.IPCIDR); err == nil {
+	writeSidecar(path, raw, P.Domain, P.YamlRule, buildOversizedStrategy(t, 12000))
+	if _, err := loadFromSidecar(sidecarPath(path), raw, P.IPCIDR, P.YamlRule); err == nil {
 		t.Fatal("wrong behavior accepted")
 	}
 	buf := readSource(t, sidecarPath(path))
@@ -74,7 +84,7 @@ func TestSidecarRejectsPayloadCorruptionAndWrongBehavior(t *testing.T) {
 	if err := os.WriteFile(sidecarPath(path), buf, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadFromSidecar(sidecarPath(path), raw, P.Domain); err == nil {
+	if _, err := loadFromSidecar(sidecarPath(path), raw, P.Domain, P.YamlRule); err == nil {
 		t.Fatal("corrupt payload accepted")
 	}
 }
@@ -150,7 +160,7 @@ func TestFetcherFirstDownloadAndChangedDownload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cache.yaml")
 	v := &freshnessVehicle{path: path, data: oldRaw}
 	if maxLowMemoryRuleCount > 0 {
-		writeSidecar(path, oldRaw, P.Domain, buildOversizedStrategy(t, 12000))
+		writeSidecar(path, oldRaw, P.Domain, P.YamlRule, buildOversizedStrategy(t, 12000))
 	}
 	rp := freshProvider(t, v)
 	if err := rp.Initial(); err != nil {
@@ -178,7 +188,7 @@ func TestFetcherFirstDownloadAndChangedDownload(t *testing.T) {
 			built.Insert("+.next" + itoa(i) + ".example")
 		}
 		built.FinishInsert()
-		writeSidecar(path, newRaw, P.Domain, built)
+		writeSidecar(path, newRaw, P.Domain, P.YamlRule, built)
 	}
 	v.data = newRaw
 	// A raw publication failure must not commit either the new hash or matcher.

@@ -176,6 +176,22 @@ func TestConvertsV2RayMieruFragment(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestConvertsV2RayPureVlessPreservesEncodedSuffix(t *testing.T) {
+	link := "vless://00112233-4455-6677-8899-aabbccddeeff%23PuRe@example.com:443?encryption=none&security=tls&type=ws&path=%2Fwebsocket#Pure-Node"
+
+	proxies, err := ConvertsV2Ray([]byte(link))
+
+	assert.NoError(t, err)
+	assert.Len(t, proxies, 1)
+	assert.Equal(t, "00112233-4455-6677-8899-aabbccddeeff#PuRe", proxies[0]["uuid"])
+	assert.Equal(t, "Pure-Node", proxies[0]["name"])
+	assert.Equal(t, false, proxies[0]["udp"])
+	assert.Equal(t, false, proxies[0]["xudp"])
+	assert.NotContains(t, proxies[0], "client-fingerprint")
+	_, err = adapter.ParseProxy(proxies[0])
+	assert.NoError(t, err)
+}
+
 func TestConvertsV2RayVlessRealityVisionTCPWithoutHeaderType(t *testing.T) {
 	vlessTest := "vless://a1b2c3d4-eacc-4433-981b-7e5f9a8b@142.98.76.54:34888?encryption=none&security=reality&type=tcp&sni=github.io&fp=chrome&pbk=ppQ9FwLrLIa0AOrp1WvcyiaQ37vg2WSy_CD4bIdiTUw&sid=6ba85179f3a2b4c5&flow=xtls-rprx-vision#My-VLESS-Reality-Vision"
 

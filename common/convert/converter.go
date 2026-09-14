@@ -240,6 +240,16 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			if encryption := query.Get("encryption"); encryption != "" {
 				vless["encryption"] = encryption
 			}
+			if strings.HasSuffix(strings.ToLower(urlVLess.User.Username()), "#pure") {
+				vless["udp"] = false
+				vless["xudp"] = false
+				delete(vless, "client-fingerprint")
+				if query.Get("host") == "" {
+					if wsOpts, ok := vless["ws-opts"].(map[string]any); ok {
+						delete(wsOpts, "headers")
+					}
+				}
+			}
 			proxies = append(proxies, vless)
 
 		case "vmess":

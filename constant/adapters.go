@@ -53,6 +53,7 @@ const (
 	OpenVPN
 	Tailscale
 	ZeroTier
+	EasyTier
 	GostRelay
 	XHttp
 	Oppa

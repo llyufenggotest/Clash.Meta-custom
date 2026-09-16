@@ -371,18 +371,20 @@ func loadProvider[T P.Provider](providers map[string]T) {
 		}
 	}
 
-	wg := sync.WaitGroup{}
-	ch := make(chan struct{}, concurrentCount)
+	pending := make([]T, 0, len(providers))
 	for _, pv := range providers {
-		pv := pv
-		wg.Add(1)
-		ch <- struct{}{}
-		go func() {
-			defer func() { <-ch; wg.Done() }()
-			load(pv)
-		}()
+		pending = append(pending, pv)
 	}
-	wg.Wait()
+	go func() {
+		ch := make(chan struct{}, concurrentCount)
+		for _, pv := range pending {
+			ch <- struct{}{}
+			go func(pv T) {
+				defer func() { <-ch }()
+				load(pv)
+			}(pv)
+		}
+	}()
 }
 
 func updateSniffer(snifferConfig *sniffer.Config) {

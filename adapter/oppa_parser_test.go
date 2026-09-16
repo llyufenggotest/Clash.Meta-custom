@@ -31,8 +31,8 @@ func TestParseOppaProxy(t *testing.T) {
 	}
 }
 
-func TestParseOppaRejectsUnimplementedPreConnect(t *testing.T) {
-	_, err := ParseProxy(map[string]any{
+func TestParseOppaAcceptsPreConnectCompatibilityHint(t *testing.T) {
+	proxy, err := ParseProxy(map[string]any{
 		"name":        "Oppa fixture",
 		"type":        "oppa",
 		"server":      "node.example",
@@ -40,8 +40,11 @@ func TestParseOppaRejectsUnimplementedPreConnect(t *testing.T) {
 		"password":    "future-token",
 		"pre-connect": 8,
 	})
-	if err == nil {
-		t.Fatal("unimplemented pre-connect setting was accepted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proxy.Type() != C.Oppa {
+		t.Fatalf("unexpected adapter type: %s", proxy.Type())
 	}
 }
 

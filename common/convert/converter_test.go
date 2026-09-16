@@ -11,6 +11,69 @@ import (
 )
 
 // https://v2.hysteria.network/zh/docs/developers/URI-Scheme/
+func TestCompatibilityWireGuard(t *testing.T) {
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	uri := "wg://[2400:5680:1000:1007::4]:17238?publicKey=" + key + "&privateKey=" + key + "&ip=10.0.5.15/16,fd10:10:10:0:10:0:5:15/64&mtu=1420&udp=1&flag=HK#WG"
+	proxies, err := ConvertsV2Ray([]byte(uri))
+	if !assert.NoError(t, err) || !assert.Len(t, proxies, 1) {
+		return
+	}
+	p := proxies[0]
+	for field, want := range map[string]any{"name": "WG", "type": "wireguard", "server": "2400:5680:1000:1007::4", "port": "17238", "public-key": key, "private-key": key, "ip": "10.0.5.15/16", "ipv6": "fd10:10:10:0:10:0:5:15/64", "mtu": 1420, "udp": true, "flag": "HK"} {
+		assert.Equal(t, want, p[field], field)
+	}
+	_, err = adapter.ParseProxy(p)
+	assert.NoError(t, err)
+}
+
+func TestCompatibilityHysteria2(t *testing.T) {
+	for _, tt := range []struct{ authority, query, sni, ports string }{
+		{"192.124.176.186:56752", "peer=addons.bujiasu.com&mport=55002-65000", "addons.bujiasu.com", "55002-65000"},
+		{"example.com:443,5000-6000", "sni=standard.example&peer=alias.example&mport=55002-65000", "standard.example", "443,5000-6000"},
+	} {
+		t.Run(tt.authority, func(t *testing.T) {
+			proxies, err := ConvertsV2Ray([]byte("hysteria2://uuid@" + tt.authority + "?" + tt.query + "#Hy2"))
+			if !assert.NoError(t, err) || !assert.Len(t, proxies, 1) {
+				return
+			}
+			assert.Equal(t, tt.sni, proxies[0]["sni"])
+			assert.Equal(t, tt.ports, proxies[0]["ports"])
+			_, err = adapter.ParseProxy(proxies[0])
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func TestCompatibilityVlessAuthority(t *testing.T) {
+	id := "00112233-4455-6677-8899-aabbccddeeff"
+	for _, encoding := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		uri := "vless://" + encoding.EncodeToString([]byte("auto:"+id+"@example.com:443")) + "?remarks=Legacy&tls=1&peer=peer.example&udp=0&xtls=0"
+		proxies, err := ConvertsV2Ray([]byte(uri))
+		if !assert.NoError(t, err) || !assert.Len(t, proxies, 1) {
+			continue
+		}
+		for field, want := range map[string]any{"uuid": id, "name": "Legacy", "server": "example.com", "port": "443", "tls": true, "servername": "peer.example", "udp": false} {
+			assert.Equal(t, want, proxies[0][field], field)
+		}
+		_, err = adapter.ParseProxy(proxies[0])
+		assert.NoError(t, err)
+	}
+}
+
+func TestCompatibilityBareVmessJSON(t *testing.T) {
+	input := `{"type":"Vmess","host":"example.com","port":443,"password":"00112233-4455-6677-8899-aabbccddeeff","title":"JSON","method":"auto"}`
+	proxies, err := ConvertsV2Ray([]byte(input))
+	if !assert.NoError(t, err) || !assert.Len(t, proxies, 1) {
+		return
+	}
+	expected := map[string]any{"name": "JSON", "type": "vmess", "server": "example.com", "port": 443, "uuid": "00112233-4455-6677-8899-aabbccddeeff", "cipher": "auto", "alterId": 0, "udp": true}
+	assert.Equal(t, expected, proxies[0])
+	_, err = adapter.ParseProxy(proxies[0])
+	assert.NoError(t, err)
+	_, err = ConvertsV2Ray([]byte(`{"host":"example.com","port":443,"password":"secret","method":"aes-128-gcm"}`))
+	assert.Error(t, err)
+}
+
 func TestConvertsV2Ray_normal(t *testing.T) {
 	hy2test := "hysteria2://letmein@example.com:8443/?insecure=1&obfs=salamander&obfs-password=gawrgura&pinSHA256=65b3acd7db555768304a16abb6f4366c1a0c0bb5cec81429617f0150d7d66726&sni=real.example.com&up=114&down=514&alpn=h3,h4#hy2test"
 

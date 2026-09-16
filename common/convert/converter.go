@@ -29,11 +29,64 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 
 		scheme, body, found := strings.Cut(line, "://")
 		if !found {
+			var bare map[string]any
+			if json.Unmarshal([]byte(line), &bare) == nil {
+				kind, _ := bare["type"].(string)
+				name, nameOK := bare["title"].(string)
+				host, hostOK := bare["host"].(string)
+				password, passwordOK := bare["password"].(string)
+				method, methodOK := bare["method"].(string)
+				_, portOK := bare["port"]
+				if strings.EqualFold(kind, "vmess") && nameOK && hostOK && passwordOK && methodOK && portOK && name != "" && host != "" && password != "" && method != "" {
+					port := bare["port"]
+					if number, ok := port.(float64); ok && number == float64(int(number)) {
+						port = int(number)
+					}
+					vmess := map[string]any{"name": uniqueName(names, name), "type": "vmess", "server": host, "port": port, "uuid": password, "cipher": method, "alterId": 0, "udp": true}
+					proxies = append(proxies, vmess)
+				}
+			}
 			continue
 		}
 
 		scheme = strings.ToLower(scheme)
 		switch scheme {
+		case "wg":
+			link, err := url.Parse(line)
+			if err != nil || link.Hostname() == "" || link.Port() == "" {
+				continue
+			}
+			query := link.Query()
+			name := link.Fragment
+			if name == "" {
+				name = query.Get("flag")
+			}
+			if name == "" {
+				name = link.Host
+			}
+			wg := map[string]any{"name": uniqueName(names, name), "type": "wireguard", "server": link.Hostname(), "port": link.Port(), "public-key": query.Get("publicKey"), "private-key": query.Get("privateKey")}
+			for _, address := range strings.Split(query.Get("ip"), ",") {
+				address = strings.TrimSpace(address)
+				if address == "" {
+					continue
+				}
+				field := "ip"
+				if strings.Contains(address, ":") {
+					field = "ipv6"
+				}
+				wg[field] = address
+			}
+			if mtu, err := strconv.Atoi(query.Get("mtu")); err == nil {
+				wg["mtu"] = mtu
+			}
+			if udp, err := strconv.ParseBool(query.Get("udp")); err == nil {
+				wg["udp"] = udp
+			}
+			if flag := query.Get("flag"); flag != "" {
+				wg["flag"] = flag
+			}
+			proxies = append(proxies, wg)
+
 		case "hysteria":
 			urlHysteria, err := url.Parse(line)
 			if err != nil {
@@ -89,12 +142,18 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			} else {
 				hysteria2["port"] = "443"
 			}
+			if ports == "" {
+				ports = query.Get("mport")
+			}
 			if ports != "" {
 				hysteria2["ports"] = ports
 			}
 			hysteria2["obfs"] = query.Get("obfs")
 			hysteria2["obfs-password"] = query.Get("obfs-password")
 			hysteria2["sni"] = query.Get("sni")
+			if hysteria2["sni"] == "" {
+				hysteria2["sni"] = query.Get("peer")
+			}
 			hysteria2["skip-cert-verify"], _ = strconv.ParseBool(query.Get("insecure"))
 			if alpn := query.Get("alpn"); alpn != "" {
 				hysteria2["alpn"] = strings.Split(alpn, ",")
@@ -219,17 +278,57 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 
 			proxies = append(proxies, trojan)
 
-		case "vless":
+		case "vless", "xless":
 			urlVLess, err := url.Parse(line)
 			if err != nil {
 				continue
 			}
+			if scheme == "xless" {
+				if urlVLess.User == nil || urlVLess.User.Username() == "" {
+					return nil, fmt.Errorf("xless URI has no UUID")
+				}
+				id := urlVLess.User.Username()
+				if strings.Contains(id, "#") && !strings.HasSuffix(id, "#pure") {
+					return nil, fmt.Errorf("xless URI has a conflicting protocol suffix")
+				}
+				if !strings.HasSuffix(id, "#pure") {
+					id += "#pure"
+				}
+				urlVLess.User = url.User(id)
+				scheme = "vless"
+			}
 			if decodedHost, err := tryDecodeBase64([]byte(urlVLess.Host)); err == nil {
-				urlVLess.Host = string(decodedHost)
+				decoded := string(decodedHost)
+				if strings.HasPrefix(decoded, "auto:") {
+					if compat, parseErr := url.Parse("vless://" + decoded); parseErr == nil {
+						compat.RawQuery, compat.Fragment = urlVLess.RawQuery, urlVLess.Fragment
+						urlVLess = compat
+					}
+				} else {
+					urlVLess.Host = decoded
+				}
 			}
 			query := urlVLess.Query()
+			if urlVLess.User != nil && urlVLess.User.Username() == "auto" {
+				if id, ok := urlVLess.User.Password(); ok {
+					urlVLess.User = url.User(id)
+				}
+			}
+			if urlVLess.Fragment == "" {
+				urlVLess.Fragment = query.Get("remarks")
+			}
+			if query.Get("tls") != "" && query.Get("security") == "" {
+				query.Set("security", "tls")
+			}
+			if peer := query.Get("peer"); peer != "" && query.Get("sni") == "" {
+				query.Set("sni", peer)
+			}
+			urlVLess.RawQuery = query.Encode()
 			vless := make(map[string]any, 20)
 			err = handleVShareLink(names, urlVLess, scheme, vless)
+			if query.Get("udp") == "0" {
+				vless["udp"] = false
+			}
 			if err != nil {
 				log.Warnln("error:%s line:%s", err.Error(), line)
 				continue
@@ -241,6 +340,9 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 				vless["encryption"] = encryption
 			}
 			if strings.HasSuffix(strings.ToLower(urlVLess.User.Username()), "#pure") {
+				if insecure := query.Get("allowInsecure"); insecure != "" {
+					vless["skip-cert-verify"], _ = strconv.ParseBool(insecure)
+				}
 				vless["udp"] = false
 				vless["xudp"] = false
 				delete(vless, "client-fingerprint")

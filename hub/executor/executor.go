@@ -40,6 +40,8 @@ import (
 	"github.com/metacubex/mihomo/listener/tproxy"
 	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/ntp/ntp"
+	R "github.com/metacubex/mihomo/rules"
+	RP "github.com/metacubex/mihomo/rules/provider"
 	"github.com/metacubex/mihomo/tunnel"
 )
 
@@ -81,10 +83,24 @@ func ParseWithBytes(buf []byte) (*config.Config, error) {
 	return config.Parse(buf)
 }
 
+// PrepareRuleProvider prepares exactly one Dart-extracted provider definition.
+// The caller supplies the immutable cache path; definition path/url fields are
+// metadata only and cannot redirect writes.
+func PrepareRuleProvider(name string, definition map[string]any, targetPath string) (RP.PreparedRuleProvider, error) {
+	return RP.PrepareRuleProvider(name, definition, targetPath, R.ParseRule)
+}
+
 // ApplyConfig dispatch configure to all parts without ExternalController
-func ApplyConfig(cfg *config.Config, force bool) {
+func ApplyConfig(cfg *config.Config, force bool) error {
 	mux.Lock()
 	defer mux.Unlock()
+	// Admission happens before publishing rules or changing the active tunnel.
+	// Runner prepares artifacts; the extension only admits locally ready rules.
+	if features.IOS || features.WithLowMemory {
+		if err := preflightRuleProviders(cfg.RuleProviders, features.WithLowMemory); err != nil {
+			return err
+		}
+	}
 	log.SetLevel(cfg.General.LogLevel)
 
 	tunnel.OnSuspend()
@@ -105,8 +121,8 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	updateGeneral(cfg.General, true)
 	updateDNS(cfg.DNS, cfg.General.IPv6)
 	updateNTP(cfg.NTP) // initialize NTP after DNS because an NTP server may be a hostname.
-	//updateListeners(cfg.General, cfg.Listeners, force)
-	//updateTun(cfg.General) // tun should not care "force"
+	updateListeners(cfg.General, cfg.Listeners, force)
+	updateTun(cfg.General) // tun should not care "force"
 	updateIPTables(cfg)
 	updateTunnels(cfg.Tunnels)
 
@@ -114,8 +130,11 @@ func ApplyConfig(cfg *config.Config, force bool) {
 
 	initInnerTcp()
 	loadProvider(cfg.Providers)
+	wireFastNodeCache()
 	updateProfile(cfg)
-	loadProvider(cfg.RuleProviders)
+	if !features.IOS && !features.WithLowMemory {
+		loadRuleProviders(cfg.RuleProviders)
+	}
 	runtime.GC()
 	tunnel.OnRunning()
 	if !features.WithLowMemory {
@@ -123,6 +142,7 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	}
 
 	resolver.ResetConnection()
+	return nil
 }
 
 func initInnerTcp() {
@@ -318,6 +338,12 @@ func updateRules(rules []C.Rule, subRules map[string][]C.Rule, ruleProviders map
 	tunnel.UpdateRules(rules, subRules, ruleProviders)
 }
 
+// Non-iOS unconstrained builds retain their existing provider loading policy.
+// iOS/low-memory builds use local admission before any tunnel mutation.
+func loadRuleProviders[T P.Provider](providers map[string]T) {
+	loadProvider(providers)
+}
+
 func loadProvider[T P.Provider](providers map[string]T) {
 	load := func(pv T) {
 		name := pv.Name()
@@ -356,6 +382,7 @@ func loadProvider[T P.Provider](providers map[string]T) {
 			load(pv)
 		}()
 	}
+	wg.Wait()
 }
 
 func updateSniffer(snifferConfig *sniffer.Config) {
@@ -451,6 +478,24 @@ func updateProfile(cfg *config.Config) {
 	}
 }
 
+// wireFastNodeCache connects url-test groups to the profile cache so a group's
+// resolved node survives a restart. This is independent of StoreSelected: it
+// caches a decision the group made on its own (not a user selection), purely to
+// avoid a cold start dialing a dead proxies[0] while the health check runs.
+// Registered once; the closures read the live cache each call.
+func wireFastNodeCache() {
+	fastNodeWireOnce.Do(func() {
+		outboundgroup.SetFastNodeLoader(func(group string) string {
+			return cachefile.Cache().FastNodeMap()[group]
+		})
+		outboundgroup.SetFastNodePersister(func(group, node string) {
+			cachefile.Cache().SetFastNode(group, node)
+		})
+	})
+}
+
+var fastNodeWireOnce sync.Once
+
 func patchSelectGroup(proxies map[string]C.Proxy) {
 	mapping := cachefile.Cache().SelectedMap()
 	if mapping == nil {
@@ -539,6 +584,7 @@ func Shutdown() {
 	listener.Cleanup()
 	tproxy.CleanupTProxyIPTables()
 	resolver.StoreFakePoolState()
+	tunnel.RetireRuleProviders()
 
 	log.Warnln("Mihomo shutting down")
 }

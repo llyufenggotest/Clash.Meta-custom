@@ -58,6 +58,18 @@ type path struct {
 	safePaths       []string
 }
 
+// cacheFileName lets a secondary process use its own bbolt cache file.
+// bbolt takes an exclusive file lock, so two processes sharing one home
+// directory make the loser fail with "can't open cache file: timeout".
+var cacheFileName string
+
+// SetCacheFileName overrides the bbolt cache file name. Pass an empty string to
+// restore the default. Only a process that does not own the canonical cache
+// should call this.
+func SetCacheFileName(name string) {
+	cacheFileName = name
+}
+
 // SetHomeDir is used to set the configuration path
 func SetHomeDir(root string) {
 	Path.homeDir = root
@@ -192,7 +204,14 @@ func (p *path) OldCache() string {
 }
 
 func (p *path) Cache() string {
-	return P.Join(p.homeDir, "cache.db")
+	return P.Join(p.homeDir, p.cacheFileName())
+}
+
+func (p *path) cacheFileName() string {
+	if cacheFileName == "" {
+		return "cache.db"
+	}
+	return cacheFileName
 }
 
 func (p *path) GeoIP() string {

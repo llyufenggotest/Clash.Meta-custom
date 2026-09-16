@@ -704,7 +704,7 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	config.Rules = rules
+	config.Rules = prependProxyServerBypassRules(rules, proxies)
 
 	hosts, err := parseHosts(rawCfg)
 	if err != nil {
@@ -875,6 +875,24 @@ func parseTLS(cfg *RawConfig) (*TLS, error) {
 	}, nil
 }
 
+// firstRealOutboundName returns the name of the first outbound in proxyList
+// that has an actual server address. The built-in DIRECT/REJECT/REJECT-DROP/
+// COMPATIBLE/PASS adapters and proxy groups all report an empty Addr(), so they
+// are skipped. Used to seed an auto-created GLOBAL selector with a working node
+// instead of letting it fall through to DIRECT.
+func firstRealOutboundName(proxyList []string, proxies map[string]C.Proxy) string {
+	for _, name := range proxyList {
+		p, ok := proxies[name]
+		if !ok {
+			continue
+		}
+		if p.Addr() != "" {
+			return name
+		}
+	}
+	return ""
+}
+
 func parseProxies(cfg *RawConfig) (proxies map[string]C.Proxy, providersMap map[string]P.ProxyProvider, err error) {
 	proxies = make(map[string]C.Proxy)
 	providersMap = make(map[string]P.ProxyProvider)
@@ -974,11 +992,23 @@ func parseProxies(cfg *RawConfig) (proxies map[string]C.Proxy, providersMap map[
 	providersMap[provider.ReservedName] = pd
 
 	if !hasGlobal {
+		// An empty selector falls through to proxies[0], and proxyList always
+		// starts with DIRECT/REJECT -- so an auto-created GLOBAL group would
+		// resolve to DIRECT and global mode would dial everything directly,
+		// i.e. no network at all on a censored network. Seed it with the first
+		// real outbound (one that has a server address; groups and the built-in
+		// DIRECT/REJECT/COMPATIBLE report an empty Addr()). The app still
+		// overrides this via SelectedMap when the user picks a node, but this
+		// guarantees global mode is never silently pinned to DIRECT.
+		globalOption := outboundgroup.SelectorOption{}
+		if def := firstRealOutboundName(proxyList, proxies); def != "" {
+			globalOption.DefaultSelected = def
+		}
 		global, err := outboundgroup.NewSelector(
 			outboundgroup.GroupCommonOption{
 				Name: "GLOBAL",
 			},
-			outboundgroup.SelectorOption{},
+			globalOption,
 			proxies["COMPATIBLE"],
 			[]P.ProxyProvider{pd},
 		)

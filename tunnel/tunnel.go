@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"path/filepath"
@@ -49,6 +50,7 @@ var (
 	providers     map[string]P.ProxyProvider
 	ruleProviders map[string]P.RuleProvider
 	configMux     sync.RWMutex
+	ruleSnapshot  = newRuleConfigSnapshot(nil, nil, nil)
 
 	// for compatibility, lazy init
 	tcpQueue  chan C.ConnContext
@@ -67,10 +69,82 @@ var (
 	snifferDispatcher *sniffer.Dispatcher
 	sniffingEnable    = false
 
-	ruleUpdateCallback = utils.NewCallback[P.RuleProvider]()
+	ruleUpdateCallback = utils.NewCallback[P.RuleUpdate]()
 )
 
 type tunnel struct{}
+
+type ruleConfigSnapshot struct {
+	rules         []C.Rule
+	subRules      map[string][]C.Rule
+	ruleProviders map[string]P.RuleProvider
+	readers       sync.WaitGroup
+	closeOnce     sync.Once
+	retired       chan struct{}
+}
+
+func newRuleConfigSnapshot(rules []C.Rule, subRules map[string][]C.Rule, providers map[string]P.RuleProvider) *ruleConfigSnapshot {
+	return &ruleConfigSnapshot{
+		rules:         rules,
+		subRules:      subRules,
+		ruleProviders: providers,
+		retired:       make(chan struct{}),
+	}
+}
+
+// RuleSnapshotLease pins one published rule snapshot until Release. Any rule
+// provider removed by a reload is closed only after all leases on its old
+// snapshot have been released.
+type RuleSnapshotLease struct {
+	snapshot *ruleConfigSnapshot
+}
+
+func (l *RuleSnapshotLease) Rules() []C.Rule {
+	if l == nil || l.snapshot == nil {
+		return nil
+	}
+	return l.snapshot.rules
+}
+
+func (l *RuleSnapshotLease) RulesFor(metadata *C.Metadata) []C.Rule {
+	if l == nil || l.snapshot == nil {
+		return nil
+	}
+	if sr, ok := l.snapshot.subRules[metadata.SpecialRules]; ok {
+		log.Debugln("[Rule] use %s rules", metadata.SpecialRules)
+		return sr
+	}
+	log.Debugln("[Rule] use default rules")
+	return l.snapshot.rules
+}
+
+func (l *RuleSnapshotLease) RuleProviders() map[string]P.RuleProvider {
+	if l == nil || l.snapshot == nil {
+		return nil
+	}
+	return l.snapshot.ruleProviders
+}
+
+func (l *RuleSnapshotLease) Release() {
+	if l == nil || l.snapshot == nil {
+		return
+	}
+	l.snapshot.readers.Done()
+	l.snapshot = nil
+}
+
+func acquireRuleSnapshotLocked() *RuleSnapshotLease {
+	snapshot := ruleSnapshot
+	snapshot.readers.Add(1)
+	return &RuleSnapshotLease{snapshot: snapshot}
+}
+
+func AcquireRuleSnapshot() *RuleSnapshotLease {
+	configMux.RLock()
+	lease := acquireRuleSnapshotLocked()
+	configMux.RUnlock()
+	return lease
+}
 
 var Tunnel = tunnel{}
 var _ C.Tunnel = Tunnel
@@ -124,11 +198,22 @@ func (t tunnel) Providers() map[string]P.ProxyProvider {
 	return providers
 }
 
-func (t tunnel) RuleProviders() map[string]P.RuleProvider {
-	return ruleProviders
+func (t tunnel) AcquireRuleProviders() (map[string]P.RuleProvider, func()) {
+	lease := AcquireRuleSnapshot()
+	return lease.RuleProviders(), lease.Release
 }
 
-func (t tunnel) RuleUpdateCallback() *utils.Callback[P.RuleProvider] {
+func (t tunnel) RuleProviders() map[string]P.RuleProvider {
+	lease := AcquireRuleSnapshot()
+	defer lease.Release()
+	return cloneRuleProviders(lease.RuleProviders())
+}
+
+func (t tunnel) AcquireRuleSnapshot() P.RuleSnapshotLease {
+	return AcquireRuleSnapshot()
+}
+
+func (t tunnel) RuleUpdateCallback() *utils.Callback[P.RuleUpdate] {
 	return ruleUpdateCallback
 }
 
@@ -193,22 +278,131 @@ func NatTable() C.NatTable {
 	return natTable
 }
 
-// Rules return all rules
+// Rules returns a stable copy of the currently published rules. Callers that
+// invoke rules/providers must use AcquireRuleSnapshot for the whole operation.
 func Rules() []C.Rule {
-	return rules
+	lease := AcquireRuleSnapshot()
+	defer lease.Release()
+	return slices.Clone(lease.Rules())
 }
 
 func Listeners() map[string]C.InboundListener {
 	return listeners
 }
 
-// UpdateRules handle update rules
+// UpdateRules publishes an immutable rule snapshot. Providers not retained by
+// identity are retired asynchronously after the old snapshot's readers drain.
 func UpdateRules(newRules []C.Rule, newSubRule map[string][]C.Rule, rp map[string]P.RuleProvider) {
+	next := newRuleConfigSnapshot(newRules, newSubRule, rp)
+
 	configMux.Lock()
+	old := ruleSnapshot
 	rules = newRules
 	ruleProviders = rp
 	subRules = newSubRule
+	ruleSnapshot = next
 	configMux.Unlock()
+
+	retireRuleSnapshot(old, rp)
+}
+
+// RetireRuleProviders publishes an empty rule snapshot. Shutdown waits for the
+// previous snapshot's readers and provider closes, bounded by the timeout.
+func RetireRuleProviders() {
+	RetireRuleProvidersWithTimeout(5 * time.Second)
+}
+
+func RetireRuleProvidersWithTimeout(timeout time.Duration) bool {
+	next := newRuleConfigSnapshot(nil, nil, nil)
+	configMux.Lock()
+	old := ruleSnapshot
+	rules = nil
+	ruleProviders = nil
+	subRules = nil
+	ruleSnapshot = next
+	configMux.Unlock()
+
+	done := retireRuleSnapshot(old, nil)
+	if timeout <= 0 {
+		<-done
+		return true
+	}
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		log.Warnln("[RuleProvider] timed out waiting for rule snapshot readers")
+		return false
+	}
+}
+
+func retireRuleSnapshot(snapshot *ruleConfigSnapshot, next map[string]P.RuleProvider) <-chan struct{} {
+	if snapshot == nil {
+		done := make(chan struct{})
+		close(done)
+		return done
+	}
+	stale := staleRuleProviders(snapshot.ruleProviders, next)
+	snapshot.closeOnce.Do(func() {
+		go func() {
+			snapshot.readers.Wait()
+			closeRuleProviders(stale)
+			close(snapshot.retired)
+		}()
+	})
+	return snapshot.retired
+}
+
+func cloneRuleProviders(providers map[string]P.RuleProvider) map[string]P.RuleProvider {
+	if providers == nil {
+		return nil
+	}
+	clone := make(map[string]P.RuleProvider, len(providers))
+	for name, provider := range providers {
+		clone[name] = provider
+	}
+	return clone
+}
+
+func staleRuleProviders(old, next map[string]P.RuleProvider) []P.RuleProvider {
+	if len(old) == 0 {
+		return nil
+	}
+	retained := make(map[P.RuleProvider]struct{}, len(next))
+	for _, provider := range next {
+		retained[provider] = struct{}{}
+	}
+	seen := make(map[P.RuleProvider]struct{}, len(old))
+	stale := make([]P.RuleProvider, 0, len(old))
+	for _, provider := range old {
+		if provider == nil {
+			continue
+		}
+		if _, keep := retained[provider]; keep {
+			continue
+		}
+		if _, duplicate := seen[provider]; duplicate {
+			continue
+		}
+		seen[provider] = struct{}{}
+		stale = append(stale, provider)
+	}
+	return stale
+}
+
+func closeRuleProviders(stale []P.RuleProvider) {
+	for _, provider := range stale {
+		closer, ok := provider.(io.Closer)
+		if !ok {
+			continue
+		}
+		name := provider.Name()
+		if err := closer.Close(); err != nil {
+			log.Warnln("[RuleProvider] close %s: %s", name, err.Error())
+			continue
+		}
+		log.Infoln("[RuleProvider] closed stale provider %s", name)
+	}
 }
 
 // Proxies return all proxies
@@ -223,16 +417,73 @@ func Providers() map[string]P.ProxyProvider {
 
 // RuleProviders return all loaded rule providers
 func RuleProviders() map[string]P.RuleProvider {
-	return ruleProviders
+	lease := AcquireRuleSnapshot()
+	defer lease.Release()
+	return cloneRuleProviders(lease.RuleProviders())
 }
 
 // UpdateProxies handle update proxies
+//
+// Providers that are not part of the new set are closed before being dropped.
+// A provider owns a health-check goroutine that holds a reference to its proxy
+// slice, so replacing the map alone leaks both the goroutine and every proxy it
+// probes: switching subscriptions used to leave the previous subscription's
+// health checks running forever, pinning its nodes in memory. That is fatal on
+// iOS, where jetsam accounts phys_footprint and reclaim cannot free pages a
+// live goroutine still references.
 func UpdateProxies(newProxies map[string]C.Proxy, newProviders map[string]P.ProxyProvider) {
 	configMux.Lock()
+	stale := staleProviders(providers, newProviders)
 	proxies = newProxies
 	providers = newProviders
 	invalidateAllProxies()
 	configMux.Unlock()
+
+	closeProviders(stale)
+}
+
+// staleProviders returns the providers present in old but absent from next.
+// Identity is compared by pointer, not by name: reloading the same subscription
+// builds fresh provider objects, and the previous ones must still be closed.
+func staleProviders(old, next map[string]P.ProxyProvider) []P.ProxyProvider {
+	if len(old) == 0 {
+		return nil
+	}
+	retained := make(map[P.ProxyProvider]struct{}, len(next))
+	for _, provider := range next {
+		retained[provider] = struct{}{}
+	}
+	stale := make([]P.ProxyProvider, 0, len(old))
+	for _, provider := range old {
+		if provider == nil {
+			continue
+		}
+		if _, keep := retained[provider]; keep {
+			continue
+		}
+		stale = append(stale, provider)
+	}
+	return stale
+}
+
+// closeProviders stops the given providers outside configMux: Close cancels a
+// health-check context, and a probe in flight may still be reading tunnel state.
+// ProxyProvider does not declare Close, so the capability is probed instead of
+// assumed -- inline "compatible" providers implement it, and a future provider
+// type that does not simply keeps the old no-op behaviour.
+func closeProviders(stale []P.ProxyProvider) {
+	for _, provider := range stale {
+		closer, ok := provider.(io.Closer)
+		if !ok {
+			continue
+		}
+		name := provider.Name()
+		if err := closer.Close(); err != nil {
+			log.Warnln("[Provider] close %s: %s", name, err.Error())
+			continue
+		}
+		log.Infoln("[Provider] closed stale provider %s", name)
+	}
 }
 
 func UpdateListeners(newListeners map[string]C.InboundListener) {
@@ -654,14 +905,22 @@ func logMetadata(metadata *C.Metadata, rule C.Rule, remoteConn C.Connection) {
 
 func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, error) {
 	configMux.RLock()
+	lease := acquireRuleSnapshotLocked()
+	defer lease.Release()
 	defer configMux.RUnlock()
+
+	ruleProviderSnapshot := lease.RuleProviders()
+	helper.LookupRuleProvider = func(name string) (C.RuleProviderMatcher, bool) {
+		provider, ok := ruleProviderSnapshot[name]
+		return provider, ok
+	}
 
 	var rematchChain []string
 	for {
 		var rematchProxy C.Proxy
 		var rematchRule C.Rule
 	GetRules:
-		for _, rule := range getRules(metadata) {
+		for _, rule := range lease.RulesFor(metadata) {
 			if matched, ada := rule.Match(metadata, helper); matched {
 				adapter, ok := proxies[ada]
 				if !ok {
@@ -708,16 +967,6 @@ func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, err
 			continue
 		}
 		return proxies["DIRECT"], nil, nil
-	}
-}
-
-func getRules(metadata *C.Metadata) []C.Rule {
-	if sr, ok := subRules[metadata.SpecialRules]; ok {
-		log.Debugln("[Rule] use %s rules", metadata.SpecialRules)
-		return sr
-	} else {
-		log.Debugln("[Rule] use default rules")
-		return rules
 	}
 }
 

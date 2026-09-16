@@ -23,8 +23,9 @@ func ParseProxy(mapping map[string]any, options ...ProxyOption) (C.Proxy, error)
 	}
 
 	var (
-		proxy outbound.ProxyAdapter
-		err   error
+		proxy           outbound.ProxyAdapter
+		err             error
+		forcedFastupMux bool
 	)
 	switch proxyType {
 	case "ss":
@@ -83,6 +84,13 @@ func ParseProxy(mapping map[string]any, options ...ProxyOption) (C.Proxy, error)
 			break
 		}
 		proxy, err = outbound.NewTrojan(*trojanOption)
+		if err == nil && outbound.IsFastupTrojanPassword(trojanOption.Password) {
+			proxy, err = outbound.NewSingMux(outbound.SingMuxOption{
+				Enabled:  true,
+				Protocol: "h2mux",
+			}, proxy)
+			forcedFastupMux = err == nil
+		}
 	case "hysteria":
 		hyOption := &outbound.HysteriaOption{BasicOption: basicOption}
 		err = decoder.Decode(mapping, hyOption)
@@ -174,6 +182,13 @@ func ParseProxy(mapping map[string]any, options ...ProxyOption) (C.Proxy, error)
 			break
 		}
 		proxy, err = outbound.NewAnyTLS(*anytlsOption)
+	case "oppa":
+		oppaOption := &outbound.OppaOption{BasicOption: basicOption}
+		err = decoder.Decode(mapping, oppaOption)
+		if err != nil {
+			break
+		}
+		proxy, err = outbound.NewOppa(*oppaOption)
 	case "sudoku":
 		sudokuOption := &outbound.SudokuOption{BasicOption: basicOption}
 		err = decoder.Decode(mapping, sudokuOption)
@@ -223,6 +238,17 @@ func ParseProxy(mapping map[string]any, options ...ProxyOption) (C.Proxy, error)
 			break
 		}
 		proxy, err = outbound.NewEasyTier(*easyTierOption)
+	case "xhttp":
+		xhttpOption := &outbound.XHttpOption{BasicOption: basicOption}
+		err = decoder.Decode(mapping, xhttpOption)
+		if err != nil {
+			break
+		}
+		raw, err := outbound.NewXHttp(*xhttpOption)
+		if err != nil {
+			return nil, err
+		}
+		return outbound.NewXHttpProxyWrapper(NewProxy(raw), raw), nil
 	default:
 		return nil, fmt.Errorf("unsupport proxy type: %s", proxyType)
 	}
@@ -231,7 +257,7 @@ func ParseProxy(mapping map[string]any, options ...ProxyOption) (C.Proxy, error)
 		return nil, err
 	}
 
-	if muxMapping, muxExist := mapping["smux"].(map[string]any); muxExist {
+	if muxMapping, muxExist := mapping["smux"].(map[string]any); muxExist && !forcedFastupMux {
 		muxOption := &outbound.SingMuxOption{}
 		err = decoder.Decode(muxMapping, muxOption)
 		if err != nil {

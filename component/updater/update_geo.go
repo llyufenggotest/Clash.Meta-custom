@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/metacubex/mihomo/common/atomic"
@@ -24,23 +25,34 @@ import (
 var (
 	autoUpdate     bool
 	updateInterval int
+	geoUpdaterMu   sync.Mutex
+	geoUpdaterID   uint64
+	geoUpdaterStop context.CancelFunc
 
 	updatingGeo atomic.Bool
 )
 
 func GeoAutoUpdate() bool {
+	geoUpdaterMu.Lock()
+	defer geoUpdaterMu.Unlock()
 	return autoUpdate
 }
 
 func GeoUpdateInterval() int {
+	geoUpdaterMu.Lock()
+	defer geoUpdaterMu.Unlock()
 	return updateInterval
 }
 
 func SetGeoAutoUpdate(newAutoUpdate bool) {
+	geoUpdaterMu.Lock()
+	defer geoUpdaterMu.Unlock()
 	autoUpdate = newAutoUpdate
 }
 
 func SetGeoUpdateInterval(newGeoUpdateInterval int) {
+	geoUpdaterMu.Lock()
+	defer geoUpdaterMu.Unlock()
 	updateInterval = newGeoUpdateInterval
 }
 
@@ -60,6 +72,7 @@ func UpdateMMDB() (err error) {
 	}
 	if oldHash.Equal(hash) { // same hash, ignored
 		skipped = true
+		// refresh mtime so the next apply's update check won't re-trigger
 		_ = os.Chtimes(vehicle.Path(), time.Now(), time.Now())
 		return nil
 	}
@@ -97,6 +110,7 @@ func UpdateASN() (err error) {
 	}
 	if oldHash.Equal(hash) { // same hash, ignored
 		skipped = true
+		// refresh mtime so the next apply's update check won't re-trigger
 		_ = os.Chtimes(vehicle.Path(), time.Now(), time.Now())
 		return nil
 	}
@@ -111,7 +125,11 @@ func UpdateASN() (err error) {
 	_ = instance.Close()
 
 	defer mmdb.ReloadASN()
-	mmdb.ASNInstance().Reader.Close() //  mmdb is loaded with mmap, so it needs to be closed before overwriting the file
+	// mmdb is loaded with mmap, so it needs to be closed before overwriting the
+	// file. The reader is nil on builds that never map the database.
+	if reader := mmdb.ASNInstance().Reader; reader != nil {
+		_ = reader.Close()
+	}
 	if err = vehicle.Write(data); err != nil {
 		return fmt.Errorf("can't save ASN database file: %w", err)
 	}
@@ -136,6 +154,7 @@ func UpdateGeoIp() (err error) {
 	}
 	if oldHash.Equal(hash) { // same hash, ignored
 		skipped = true
+		// refresh mtime so the next apply's update check won't re-trigger
 		_ = os.Chtimes(vehicle.Path(), time.Now(), time.Now())
 		return nil
 	}
@@ -172,6 +191,7 @@ func UpdateGeoSite() (err error) {
 	}
 	if oldHash.Equal(hash) { // same hash, ignored
 		skipped = true
+		// refresh mtime so the next apply's update check won't re-trigger
 		_ = os.Chtimes(vehicle.Path(), time.Now(), time.Now())
 		return nil
 	}
@@ -229,7 +249,7 @@ func UpdateGeoDatabases() error {
 	log.Infoln("[GEO] Updating GEO database")
 
 	if err := updateGeoDatabases(); err != nil {
-		log.Infoln("[GEO] update GEO database error: %s", err.Error())
+		log.Errorln("[GEO] update GEO database error: %s", err.Error())
 		return err
 	}
 
@@ -256,45 +276,73 @@ func getUpdateTime() (time time.Time, err error) {
 }
 
 func RegisterGeoUpdater() {
-	registerGeoUpdater(context.Background())
-}
-
-func registerGeoUpdater(ctx context.Context) {
-	if updateInterval <= 0 {
-		log.Infoln("[GEO] Invalid update interval: %d", updateInterval)
+	geoUpdaterMu.Lock()
+	stopGeoUpdaterLocked()
+	if !autoUpdate {
+		geoUpdaterMu.Unlock()
 		return
 	}
+	if updateInterval <= 0 {
+		interval := updateInterval
+		geoUpdaterMu.Unlock()
+		log.Errorln("[GEO] Invalid update interval: %d", interval)
+		return
+	}
+	interval := updateInterval
+	ctx, cancel := context.WithCancel(context.Background())
+	geoUpdaterID++
+	id := geoUpdaterID
+	geoUpdaterStop = cancel
+	geoUpdaterMu.Unlock()
 
 	go func() {
-		ticker := time.NewTicker(time.Duration(updateInterval) * time.Hour)
+		defer func() {
+			geoUpdaterMu.Lock()
+			if geoUpdaterID == id {
+				geoUpdaterStop = nil
+			}
+			geoUpdaterMu.Unlock()
+		}()
+		ticker := time.NewTicker(time.Duration(interval) * time.Hour)
 		defer ticker.Stop()
 
 		lastUpdate, err := getUpdateTime()
 		if err != nil {
-			log.Infoln("[GEO] Get GEO database update time error: %s", err.Error())
-			return
+			log.Errorln("[GEO] Get GEO database update time error: %s", err.Error())
+		} else {
+			log.Infoln("[GEO] last update time %s", lastUpdate)
 		}
-
-		log.Infoln("[GEO] last update time %s", lastUpdate)
-		if lastUpdate.Add(time.Duration(updateInterval) * time.Hour).Before(time.Now()) {
-			log.Infoln("[GEO] Database has not been updated for %v, update now", time.Duration(updateInterval)*time.Hour)
+		if err == nil && lastUpdate.Add(time.Duration(interval)*time.Hour).Before(time.Now()) {
+			log.Infoln("[GEO] Database has not been updated for %v, update now", time.Duration(interval)*time.Hour)
 			if err := UpdateGeoDatabases(); err != nil {
-				log.Infoln("[GEO] Failed to update GEO database: %s", err.Error())
-				return
+				log.Errorln("[GEO] Failed to update GEO database: %s", err.Error())
 			}
 		}
 
 		for {
 			select {
 			case <-ctx.Done():
-				log.Infoln("[GEO] Geo updater stopped")
 				return
 			case <-ticker.C:
-				log.Infoln("[GEO] updating database every %d hours", updateInterval)
+				log.Infoln("[GEO] updating database every %d hours", interval)
 				if err := UpdateGeoDatabases(); err != nil {
-					log.Infoln("[GEO] Failed to update GEO database: %s", err.Error())
+					log.Errorln("[GEO] Failed to update GEO database: %s", err.Error())
 				}
 			}
 		}
 	}()
+}
+
+func StopGeoUpdater() {
+	geoUpdaterMu.Lock()
+	defer geoUpdaterMu.Unlock()
+	stopGeoUpdaterLocked()
+}
+
+func stopGeoUpdaterLocked() {
+	geoUpdaterID++
+	if geoUpdaterStop != nil {
+		geoUpdaterStop()
+		geoUpdaterStop = nil
+	}
 }

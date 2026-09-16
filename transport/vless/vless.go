@@ -44,6 +44,7 @@ type DstAddr struct {
 type Client struct {
 	uuid   uuid.UUID
 	Addons *Addons
+	IsX365 bool // ✨魔改新增
 }
 
 // StreamConn return a Conn with net.Conn and DstAddr
@@ -56,11 +57,12 @@ func (c *Client) PacketConn(conn net.Conn, rAddr net.Addr) net.PacketConn {
 }
 
 // NewClient return Client instance
-func NewClient(uuidStr string, addons *Addons) (*Client, error) {
+func NewClient(uuidStr string, addons *Addons, isX365 bool) (*Client, error) { // ✨修复：这里加上了 isX365 bool
 	uid := utils.UUIDMap(uuidStr)
 
 	return &Client{
 		uuid:   uid,
 		Addons: addons,
+		IsX365: isX365, // ✨赋值
 	}, nil
 }

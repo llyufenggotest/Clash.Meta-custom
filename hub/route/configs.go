@@ -441,7 +441,11 @@ func updateConfigs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	executor.ApplyConfig(cfg, force)
+	if err := executor.ApplyConfig(cfg, force); err != nil {
+		render.Status(r, http.StatusBadRequest)
+		render.JSON(w, r, map[string]string{"message": err.Error()})
+		return
+	}
 	render.NoContent(w, r)
 }
 

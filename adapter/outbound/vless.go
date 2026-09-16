@@ -13,6 +13,7 @@ import (
 	"github.com/metacubex/mihomo/common/convert"
 	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/utils"
+
 	"github.com/metacubex/mihomo/component/ca"
 	"github.com/metacubex/mihomo/component/ech"
 	tlsC "github.com/metacubex/mihomo/component/tls"
@@ -460,6 +461,17 @@ func parseVlessAddr(metadata *C.Metadata, xudp bool) *vless.DstAddr {
 }
 
 func NewVless(option VlessOption) (*Vless, error) {
+	// 🚀 清除首尾空格
+	option.UUID = strings.TrimSpace(option.UUID)
+
+	// ================= [x365 custom protocol detection] =================
+	isX365 := false
+	if strings.HasSuffix(option.UUID, "#x365") {
+		isX365 = true
+		option.UUID = strings.TrimSuffix(option.UUID, "#x365")
+	}
+	// ========================================================
+
 	var addons *vless.Addons
 	if len(option.Flow) >= 16 {
 		option.Flow = option.Flow[:16]
@@ -484,7 +496,8 @@ func NewVless(option VlessOption) (*Vless, error) {
 		option.PacketAddr = false
 	}
 
-	client, err := vless.NewClient(option.UUID, addons)
+	// ⚠️ 注意：这里多传了一个 isX365
+	client, err := vless.NewClient(option.UUID, addons, isX365)
 	if err != nil {
 		return nil, err
 	}

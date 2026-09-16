@@ -499,13 +499,9 @@ func NewVless(option VlessOption) (*Vless, error) {
 		return nil, err
 	}
 
-	// ================= [x365 custom protocol detection] =================
+	// All private VLESS markers are parsed once by the transport package so
+	// mixed suffixes cannot activate two wire modes.
 	isX365 := false
-	if strings.HasSuffix(option.UUID, "#x365") {
-		isX365 = true
-		option.UUID = strings.TrimSuffix(option.UUID, "#x365")
-	}
-	// ========================================================
 
 	var addons *vless.Addons
 	if len(option.Flow) >= 16 {

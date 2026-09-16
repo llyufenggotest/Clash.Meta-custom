@@ -77,6 +77,18 @@ func TestPrivateSuffixIsolation(t *testing.T) {
 	}
 }
 
+func TestPrivateMarkersAreMutuallyExclusive(t *testing.T) {
+	for _, value := range []string{
+		"00112233-4455-6677-8899-aabbccddeeff#juzi#x365",
+		"00112233-4455-6677-8899-aabbccddeeff#x365#juzi",
+		"00112233-4455-6677-8899-aabbccddeeff#pure#x365",
+	} {
+		if _, _, err := parsePrivateUUID(value); err == nil {
+			t.Fatalf("mixed private UUID %q was accepted", value)
+		}
+	}
+}
+
 func TestJuziHMACWire(t *testing.T) {
 	id := "6ac24745-6118-1ce8-57da-1aab6a9b7b56#JuZi"
 	client, err := NewClient(id, nil, false)

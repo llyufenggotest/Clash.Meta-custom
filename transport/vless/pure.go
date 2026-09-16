@@ -21,8 +21,8 @@ const (
 func parsePrivateUUID(value string) (id string, mode PrivateMode, err error) {
 	lower := strings.ToLower(value)
 	if strings.Contains(lower, "#pure") {
-		if !strings.HasSuffix(lower, "#pure") {
-			return "", ModePure, fmt.Errorf("Pure: invalid or mixed suffix")
+		if !strings.HasSuffix(lower, "#pure") || strings.Contains(lower[:len(lower)-len("#pure")], "#juzi") || strings.Contains(value[:len(value)-len("#pure")], "#x365") {
+			return "", ModePure, fmt.Errorf("private protocol markers must be one exact suffix")
 		}
 		id = value[:len(value)-len("#pure")]
 		if !canonicalUUID(id) {
@@ -30,15 +30,32 @@ func parsePrivateUUID(value string) (id string, mode PrivateMode, err error) {
 		}
 		return id, ModePure, nil
 	}
-	id = value
-	if strings.HasSuffix(lower, "#juzi") {
-		return value[:len(value)-len("#juzi")], ModeJuzi, nil
+
+	matched := ""
+	if strings.Contains(lower, "#juzi") {
+		if !strings.HasSuffix(lower, "#juzi") {
+			return "", ModeJuzi, fmt.Errorf("private protocol markers must be one exact suffix")
+		}
+		matched = "#juzi"
 	}
-	// X365 intentionally remains exact lowercase for compatibility.
-	if strings.HasSuffix(value, "#x365") {
-		return value[:len(value)-len("#x365")], ModeX365, nil
+	if strings.Contains(value, "#x365") {
+		if matched != "" || !strings.HasSuffix(value, "#x365") {
+			return "", ModeStandard, fmt.Errorf("private protocol markers must be one exact suffix")
+		}
+		matched = "#x365"
 	}
-	return id, ModeStandard, nil
+	if matched == "" {
+		return value, ModeStandard, nil
+	}
+	id = value[:len(value)-len(matched)]
+	switch matched {
+	case "#juzi":
+		return id, ModeJuzi, nil
+	case "#x365":
+		return id, ModeX365, nil
+	default:
+		return value, ModeStandard, nil
+	}
 }
 
 func canonicalUUID(value string) bool {

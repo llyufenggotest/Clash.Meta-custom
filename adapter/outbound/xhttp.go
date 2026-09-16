@@ -38,6 +38,13 @@ var (
 	xhttpPubKey  = []byte("jMJaXZXGc1CbTri1UnRdvJ3izp8f0jGhXGr2jjr9nMkBKUZDoh3Avoijc4jQUw")
 )
 
+const (
+	xhttpAPIHost             = "g.just4test.xyz"
+	xhttpAPIIP               = "104.21.41.69"
+	xhttpMaxAPIResponseBytes = 8 << 20
+	xhttpMaxPlaintextBytes   = 16 << 20
+)
+
 type xhttpRealConfig struct {
 	Name     string
 	Type     string
@@ -353,9 +360,12 @@ type XHttpConn struct {
 	ivLenOffset   int
 	handshakeDone bool
 	readMu        sync.Mutex
+	writeMu       sync.Mutex
 }
 
 func (c *XHttpConn) Write(b []byte) (n int, err error) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	buf := make([]byte, len(b))
 	c.encryptStream.XORKeyStream(buf, b)
 	return c.Conn.Write(buf)
@@ -363,11 +373,11 @@ func (c *XHttpConn) Write(b []byte) (n int, err error) {
 
 func (c *XHttpConn) Read(b []byte) (n int, err error) {
 	c.readMu.Lock()
+	defer c.readMu.Unlock()
 	if !c.handshakeDone {
 		c.Conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 		baseHeader := make([]byte, c.ivLenOffset)
 		if _, err := io.ReadFull(c.Conn, baseHeader); err != nil {
-			c.readMu.Unlock()
 			return 0, err
 		}
 
@@ -375,7 +385,6 @@ func (c *XHttpConn) Read(b []byte) (n int, err error) {
 		var shift int
 		for {
 			if _, err := io.ReadFull(c.Conn, markerBuf); err != nil {
-				c.readMu.Unlock()
 				return 0, err
 			}
 			if markerBuf[0] == 0x10 {
@@ -383,14 +392,12 @@ func (c *XHttpConn) Read(b []byte) (n int, err error) {
 			}
 			shift++
 			if shift > 10 {
-				c.readMu.Unlock()
 				return 0, errors.New("IV offset padding too large")
 			}
 		}
 
 		serverReadIV := make([]byte, 16)
 		if _, err := io.ReadFull(c.Conn, serverReadIV); err != nil {
-			c.readMu.Unlock()
 			return 0, err
 		}
 		c.Conn.SetReadDeadline(time.Time{})
@@ -398,7 +405,6 @@ func (c *XHttpConn) Read(b []byte) (n int, err error) {
 		c.decryptStream = cipher.NewCTR(c.block, serverReadIV)
 		c.handshakeDone = true
 	}
-	c.readMu.Unlock()
 
 	n, err = c.Conn.Read(b)
 	if n > 0 {
@@ -410,9 +416,42 @@ func (c *XHttpConn) Read(b []byte) (n int, err error) {
 // ========================
 // API 请求解析核心 (+ 修复 <nil> cipher BUG)
 // ========================
+func readLimited(reader io.Reader, limit int64) ([]byte, error) {
+	limited := io.LimitReader(reader, limit+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("payload exceeds %d bytes", limit)
+	}
+	return data, nil
+}
+
+func gunzipLimited(data []byte) ([]byte, error) {
+	reader, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	return readLimited(reader, xhttpMaxPlaintextBytes)
+}
+
+func xhttpAPITransport(dialer C.Dialer) *http.Transport {
+	transport := &http.Transport{
+		TLSClientConfig:   &tls.Config{ServerName: xhttpAPIHost},
+		ForceAttemptHTTP2: true,
+	}
+	if dialer != nil {
+		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "tcp", addr)
+		}
+	}
+	return transport
+}
+
 func (h *XHttp) fetchDynamicConfig(ctx context.Context, nodeID, token string) ([]xhttpRealConfig, error) {
-	cfNodeIP := "104.21.41.69"
-	url := fmt.Sprintf("https://%s/api/v3/proxy/config", cfNodeIP)
+	url := fmt.Sprintf("https://%s/api/v3/proxy/config", xhttpAPIIP)
 
 	reqMap := map[string]interface{}{
 		"fastest_ping": map[string]interface{}{},
@@ -426,26 +465,18 @@ func (h *XHttp) fetchDynamicConfig(ctx context.Context, nodeID, token string) ([
 	payloadMap := map[string]string{"data": encryptedReq}
 	payloadJson, _ := json.Marshal(payloadMap)
 
-	req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(payloadJson))
-	req.Host = "g.just4test.xyz"
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(payloadJson))
+	if err != nil {
+		return nil, fmt.Errorf("create api request: %w", err)
+	}
+	req.Host = xhttpAPIHost
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("x-version", "520")
 	req.Header.Set("x-platform", "android")
 	req.Header.Set("user-agent", "okhttp/4.9.2")
 	req.Header.Set("x-header", h.buildXHeader(token))
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			DialContext: func(c context.Context, network, addr string) (net.Conn, error) {
-				return h.dialer.DialContext(c, "tcp", addr)
-			},
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
-				ServerName:         "g.just4test.xyz",
-			},
-			ForceAttemptHTTP2: true,
-		},
-	}
+	client := &http.Client{Transport: xhttpAPITransport(h.dialer)}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -453,19 +484,24 @@ func (h *XHttp) fetchDynamicConfig(ctx context.Context, nodeID, token string) ([
 	}
 	defer resp.Body.Close()
 
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
+	bodyBytes, err := readLimited(resp.Body, xhttpMaxAPIResponseBytes)
+	if err != nil {
+		return nil, fmt.Errorf("read api response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("api returned status: %d", resp.StatusCode)
 	}
 
 	var jsonResp map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &jsonResp); err != nil {
-		var encryptedB64 string
-		encryptedB64 = strings.Trim(string(bodyBytes), "\"'\n\r\t ")
+		encryptedB64 := strings.Trim(string(bodyBytes), "\"'\n\r	 ")
 		return h.processApiData(encryptedB64)
 	}
-
-	return h.processApiData(jsonResp["data"].(string))
+	encryptedB64, ok := jsonResp["data"].(string)
+	if !ok || encryptedB64 == "" {
+		return nil, errors.New("api data field must be a non-empty string")
+	}
+	return h.processApiData(encryptedB64)
 }
 
 func (h *XHttp) processApiData(encryptedB64 string) ([]xhttpRealConfig, error) {
@@ -481,21 +517,30 @@ func (h *XHttp) processApiData(encryptedB64 string) ([]xhttpRealConfig, error) {
 		rawB64[i] ^= xhttpPrivKey[i%len(xhttpPrivKey)]
 	}
 	if bytes.HasPrefix(rawB64, []byte("\x1f\x8b")) {
-		gr, _ := gzip.NewReader(bytes.NewReader(rawB64))
-		rawB64, _ = io.ReadAll(gr)
-		gr.Close()
+		rawB64, err = gunzipLimited(rawB64)
+		if err != nil {
+			return nil, fmt.Errorf("decompress api envelope: %w", err)
+		}
 	}
 
-	var layer1 map[string]interface{}
-	json.Unmarshal(rawB64, &layer1)
-	if layer1["data"] == nil {
+	var layer1 struct {
+		Data map[string]interface{} `json:"data"`
+	}
+	if err := json.Unmarshal(rawB64, &layer1); err != nil {
+		return nil, fmt.Errorf("decode api envelope: %w", err)
+	}
+	if layer1.Data == nil {
 		return nil, errors.New("decrypted data field is missing")
 	}
+	smartB64, ok := layer1.Data["smart"].(string)
+	if !ok || smartB64 == "" {
+		return nil, errors.New("smart field must be a non-empty string")
+	}
 
-	dataObj := layer1["data"].(map[string]interface{})
-	smartB64 := dataObj["smart"].(string)
-
-	smartRaw, _ := base64.StdEncoding.DecodeString(smartB64)
+	smartRaw, err := base64.StdEncoding.DecodeString(smartB64)
+	if err != nil {
+		return nil, fmt.Errorf("decode smart payload: %w", err)
+	}
 	smartPlain, err := h.decryptBlackstonePayload(smartRaw)
 	if err != nil {
 		return nil, err
@@ -504,7 +549,9 @@ func (h *XHttp) processApiData(encryptedB64 string) ([]xhttpRealConfig, error) {
 	var smartData struct {
 		Proxies []map[string]interface{} `yaml:"proxies"`
 	}
-	yaml.Unmarshal(smartPlain, &smartData)
+	if err := yaml.Unmarshal(smartPlain, &smartData); err != nil {
+		return nil, fmt.Errorf("decode smart config: %w", err)
+	}
 
 	var realConfigs []xhttpRealConfig
 	for _, proxy := range smartData.Proxies {
@@ -681,14 +728,16 @@ func (h *XHttp) decryptBlackstonePayload(rawData []byte) ([]byte, error) {
 	}
 
 	if bytes.HasPrefix(plaintext, []byte("\x1f\x8b")) {
-		gr, err := gzip.NewReader(bytes.NewReader(plaintext))
-		if err == nil {
-			defer gr.Close()
-			uncompressed, _ := io.ReadAll(gr)
-			return uncompressed, nil
+		uncompressed, err := gunzipLimited(plaintext)
+		if err != nil {
+			return nil, fmt.Errorf("decompress blackstone payload: %w", err)
 		}
+		return uncompressed, nil
 	}
 
+	if len(plaintext) > xhttpMaxPlaintextBytes {
+		return nil, fmt.Errorf("plaintext exceeds %d bytes", xhttpMaxPlaintextBytes)
+	}
 	return plaintext, nil
 }
 

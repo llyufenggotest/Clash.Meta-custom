@@ -16,7 +16,6 @@ func TestParseOppaProxy(t *testing.T) {
 		"sni":              "tls.example",
 		"skip-cert-verify": false,
 		"udp":              true,
-		"pre-connect":      8,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -29,6 +28,20 @@ func TestParseOppaProxy(t *testing.T) {
 	}
 	if proxy.Name() != "Oppa fixture" {
 		t.Fatalf("unexpected name: %s", proxy.Name())
+	}
+}
+
+func TestParseOppaRejectsUnimplementedPreConnect(t *testing.T) {
+	_, err := ParseProxy(map[string]any{
+		"name":        "Oppa fixture",
+		"type":        "oppa",
+		"server":      "node.example",
+		"port":        443,
+		"password":    "future-token",
+		"pre-connect": 8,
+	})
+	if err == nil {
+		t.Fatal("unimplemented pre-connect setting was accepted")
 	}
 }
 

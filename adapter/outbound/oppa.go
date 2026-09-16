@@ -38,6 +38,9 @@ func NewOppa(option OppaOption) (*Oppa, error) {
 	if option.Port < 1 || option.Port > 65535 {
 		return nil, fmt.Errorf("invalid Oppa port")
 	}
+	if option.PreConnect != 0 {
+		return nil, fmt.Errorf("Oppa pre-connect is not implemented")
+	}
 	if option.SNI == "" {
 		option.SNI = option.Server
 	}

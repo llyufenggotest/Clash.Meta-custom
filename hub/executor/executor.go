@@ -341,6 +341,10 @@ func updateRules(rules []C.Rule, subRules map[string][]C.Rule, ruleProviders map
 // Non-iOS unconstrained builds retain their existing provider loading policy.
 // iOS/low-memory builds use local admission before any tunnel mutation.
 func loadRuleProviders[T P.Provider](providers map[string]T) {
+	if deferRuleProviderInitial {
+		go loadProvider(providers)
+		return
+	}
 	loadProvider(providers)
 }
 

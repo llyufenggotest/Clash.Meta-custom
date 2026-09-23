@@ -2,6 +2,8 @@ package outbound
 
 import (
 	"testing"
+
+	"github.com/metacubex/mihomo/component/ech"
 )
 
 func TestSnellFlatOIXModeNormalizesToECHTLS(t *testing.T) {
@@ -15,8 +17,13 @@ func TestSnellFlatOIXModeNormalizesToECHTLS(t *testing.T) {
 		OIXIdentityVersion: 2,
 		OIXALPN: "snell-ech/1",
 		OIXSNI:  "front.example",
-		OIXConfig: "AQID",
+		OIXConfig: "",
 	}
+	config, _, err := ech.GenECHConfig("front.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	option.OIXConfig = config
 	adapter, err := NewSnell(option)
 	if err != nil {
 		t.Fatal(err)

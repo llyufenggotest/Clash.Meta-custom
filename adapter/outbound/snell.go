@@ -67,6 +67,13 @@ type SnellOption struct {
 	ShadowTLSPrivateKey     string   `proxy:"shadow-tls-private-key,omitempty"`
 	ShadowTLSALPN           []string `proxy:"shadow-tls-alpn,omitempty"`
 	ClientFingerprint       string   `proxy:"client-fingerprint,omitempty"`
+	OIXECH                  bool     `proxy:"oix_ech,omitempty"`
+	OIXIdentityVersion      int      `proxy:"oix_identity_version,omitempty"`
+	OIXALPN                 string   `proxy:"oix_alpn,omitempty"`
+	OIXLegacyFallback       bool     `proxy:"oix_legacy_fallback,omitempty"`
+	OIXPreconnect           int      `proxy:"oix_preconnect,omitempty"`
+	OIXSNI                  string   `proxy:"oix_sni,omitempty"`
+	OIXConfig               string   `proxy:"oix_config,omitempty"`
 }
 
 func (s *Snell) Close() error {
@@ -470,6 +477,36 @@ func NewSnell(option SnellOption) (*Snell, error) {
 	}
 	if err := decoder.Decode(option.ObfsOpts, decodeOption); err != nil {
 		return nil, fmt.Errorf("snell %s initialize obfs error: %w", addr, err)
+	}
+	// Normalize the flat OIX dialect emitted by the NekoBox-compatible
+	// exporter into mihomo's nested obfs representation.
+	if obfsOption.Mode == "oix-ech-tls" {
+		obfsOption.Mode = "ech-tls"
+		oix = true
+	}
+	if option.OIXECH {
+		oix = true
+		if obfsOption.Mode == "" {
+			obfsOption.Mode = "ech-tls"
+		}
+	}
+	if option.OIXIdentityVersion != 0 {
+		obfsOption.IdentityVersion = option.OIXIdentityVersion
+	}
+	if option.OIXALPN != "" {
+		obfsOption.ALPN = option.OIXALPN
+	}
+	if option.OIXLegacyFallback {
+		obfsOption.LegacyFallback = true
+	}
+	if option.OIXPreconnect != 0 {
+		obfsOption.Preconnect = option.OIXPreconnect
+	}
+	if option.OIXSNI != "" {
+		obfsOption.SNI = option.OIXSNI
+	}
+	if option.OIXConfig != "" {
+		obfsOption.ECHConfig = option.OIXConfig
 	}
 
 	if newMode {

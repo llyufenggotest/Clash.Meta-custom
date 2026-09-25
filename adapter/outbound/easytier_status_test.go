@@ -4,6 +4,7 @@ package outbound
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -18,8 +19,33 @@ import (
 func dormantEasyTier(t *testing.T) *EasyTier {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	return &EasyTier{ctx: ctx, cancel: cancel, option: EasyTierOption{NetworkName: "mesh"}, stateDir: filepath.Join(t.TempDir(), "state")}
+	e := &EasyTier{
+		Base: NewBase(BaseOption{Name: "status-test"}),
+		ctx:  ctx, cancel: cancel, option: EasyTierOption{NetworkName: "mesh"},
+		stateDir: filepath.Join(t.TempDir(), "state"),
+	}
+	t.Cleanup(func() { _ = e.Close() })
+	return e
+}
+
+func waitEasyTierStatus(t *testing.T, ctx context.Context, e *EasyTier, state string) EasyTierStatus {
+	t.Helper()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		status, err := e.status(ctx, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status.State == state {
+			return status
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("waiting for %s: %+v, %v", state, status, ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 func TestEasyTierPassiveStatusDoesNotStart(t *testing.T) {
@@ -40,28 +66,6 @@ func TestEasyTierPassiveStatusDoesNotStart(t *testing.T) {
 	}
 	if _, err := GetEasyTierStatus(context.Background(), e, false, true); err == nil {
 		t.Fatal("activation after close succeeded")
-	}
-}
-
-func TestEasyTierActivationFailureIsStable(t *testing.T) {
-	e := dormantEasyTier(t)
-	if err := os.WriteFile(e.stateDir, nil, 0600); err != nil {
-		t.Fatal(err)
-	}
-	var first error
-	for i := 0; i < 2; i++ {
-		_, err := GetEasyTierStatus(context.Background(), e, false, true)
-		if err == nil {
-			t.Fatal("activation unexpectedly succeeded")
-		}
-		if first != nil && err != first {
-			t.Fatal("activation retried failed instance")
-		}
-		first = err
-	}
-	status, err := e.status(context.Background(), false)
-	if err != nil || status.State != "error" || status.Error == "" {
-		t.Fatalf("failed status: %+v, %v", status, err)
 	}
 }
 
@@ -96,7 +100,7 @@ func TestEasyTierLocalInstanceStatus(t *testing.T) {
 	disabledP2P := true
 	e, err := NewEasyTier(EasyTierOption{
 		Name: "status-test", NetworkName: "local-status-test", NetworkSecret: "test-only-secret",
-		Hostname: "local-test", IPv4: "10.144.0.1", StateDir: C.Path.HomeDir(),
+		Hostname: "local-test", IPv4: "10.144.0.1", StateDir: filepath.Join(C.Path.HomeDir(), "state"),
 		Listeners: []string{"tcp://127.0.0.1:0"}, DisableP2P: &disabledP2P,
 	})
 	if err != nil {
@@ -105,11 +109,32 @@ func TestEasyTierLocalInstanceStatus(t *testing.T) {
 	defer e.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	if err := os.WriteFile(e.stateDir, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	activationCtx, cancelActivation := context.WithCancel(ctx)
+	defer cancelActivation()
+	activationResult := make(chan error, 1)
+	go func() {
+		_, err := GetEasyTierStatus(activationCtx, e, false, true)
+		activationResult <- err
+	}()
+	failed := waitEasyTierStatus(t, ctx, e, "error")
+	if failed.Error == "" {
+		t.Fatal("failed startup did not report an error")
+	}
+	cancelActivation()
+	if err := <-activationResult; !errors.Is(err, context.Canceled) {
+		t.Fatalf("activation returned %v, want context cancellation", err)
+	}
+	if err := os.Remove(e.stateDir); err != nil {
+		t.Fatal(err)
+	}
 	summary, err := GetEasyTierStatus(ctx, e, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.State != "connected" || summary.Details != nil {
+	if summary.State != "connected" || summary.Error != "" || summary.Details != nil {
 		t.Fatalf("unexpected summary: %+v", summary)
 	}
 	details, err := GetEasyTierStatus(ctx, e, true, true)
@@ -122,8 +147,30 @@ func TestEasyTierLocalInstanceStatus(t *testing.T) {
 	if len(details.Details.Peers) != 0 {
 		t.Fatalf("unexpected peers: %+v", details.Details.Peers)
 	}
-	if e.instance.ID() != details.Details.InstanceID {
+	instance, err := e.currentInstance()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if instance.ID() != details.Details.InstanceID {
 		t.Fatal("activation replaced instance")
+	}
+	if err := instance.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	interrupted := waitEasyTierStatus(t, ctx, e, "error")
+	if interrupted.Error == "" {
+		t.Fatal("stopped instance did not report an error")
+	}
+	restarted := waitEasyTierStatus(t, ctx, e, "connected")
+	if restarted.Error != "" {
+		t.Fatalf("restart retained instance error: %+v", restarted)
+	}
+	replacement, err := e.currentInstance()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement == instance || replacement.ID() != instance.ID() {
+		t.Fatal("restart did not replace the instance with its persisted identity")
 	}
 	var wg sync.WaitGroup
 	for i := 0; i < 5; i++ {

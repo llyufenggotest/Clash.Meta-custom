@@ -32,6 +32,15 @@ func GetEasyTierStatus(ctx context.Context, proxy C.ProxyAdapter, includeDetails
 	}
 }
 
+func (e *EasyTier) setStatus(state string, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.ctx.Err() != nil {
+		state, err = "stopped", nil
+	}
+	e.state, e.startErr = state, err
+}
+
 func (e *EasyTier) status(ctx context.Context, includeDetails bool) (EasyTierStatus, error) {
 	e.mu.Lock()
 	status := EasyTierStatus{State: e.state, Network: e.option.NetworkName}

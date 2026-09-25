@@ -10,10 +10,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/sync/semaphore"
+
+	"github.com/metacubex/mihomo/constant/features"
 	"github.com/metacubex/mihomo/transport/anytls/padding"
 	"github.com/metacubex/mihomo/transport/anytls/skiplist"
 	"github.com/metacubex/mihomo/transport/anytls/util"
 )
+
+var idleSlots = semaphore.NewWeighted(16)
 
 type Client struct {
 	die       context.Context
@@ -101,6 +106,11 @@ func (c *Client) CreateStream(ctx context.Context) (net.Conn, error) {
 				session.Close()
 			default:
 				c.idleSessionLock.Lock()
+				if features.WithLowMemory && (session.IsClosed() || c.die.Err() != nil || !idleSlots.TryAcquire(1)) {
+					c.idleSessionLock.Unlock()
+					session.Close()
+					return
+				}
 				session.idleSince = time.Now()
 				c.idleSession.Insert(math.MaxUint64-session.seq, session)
 				c.idleSessionLock.Unlock()
@@ -116,7 +126,9 @@ func (c *Client) getIdleSession() (idle *Session) {
 	if !c.idleSession.IsEmpty() {
 		it := c.idleSession.Iterate()
 		idle = it.Value()
-		c.idleSession.Remove(it.Key())
+		if c.idleSession.Remove(it.Key()) && features.WithLowMemory {
+			idleSlots.Release(1)
+		}
 	}
 	c.idleSessionLock.Unlock()
 	return
@@ -133,7 +145,9 @@ func (c *Client) createSession(ctx context.Context) (*Session, error) {
 	session.dieHook = func() {
 		if !c.disableReuse {
 			c.idleSessionLock.Lock()
-			c.idleSession.Remove(math.MaxUint64 - session.seq)
+			if c.idleSession.Remove(math.MaxUint64-session.seq) && features.WithLowMemory {
+				idleSlots.Release(1)
+			}
 			c.idleSessionLock.Unlock()
 		}
 
@@ -174,9 +188,10 @@ func (c *Client) idleCleanup() {
 
 func (c *Client) idleCleanupExpTime(expTime time.Time) {
 	activeCount := 0
-	sessionToClose := make([]*Session, 0, c.idleSession.Len())
 
 	c.idleSessionLock.Lock()
+	sessionToClose := make([]*Session, 0, c.idleSession.Len())
+
 	it := c.idleSession.Iterate()
 	for it.IsNotEnd() {
 		session := it.Value()
@@ -195,7 +210,9 @@ func (c *Client) idleCleanupExpTime(expTime time.Time) {
 		}
 
 		sessionToClose = append(sessionToClose, session)
-		c.idleSession.Remove(key)
+		if c.idleSession.Remove(key) && features.WithLowMemory {
+			idleSlots.Release(1)
+		}
 	}
 	c.idleSessionLock.Unlock()
 

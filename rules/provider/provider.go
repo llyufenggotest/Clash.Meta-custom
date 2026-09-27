@@ -91,9 +91,15 @@ func (bp *baseProvider) Strategy() any {
 	return bp.strategy
 }
 
+type ruleContentDigest struct {
+	raw     [sha256.Size]byte
+	sidecar [sha256.Size]byte
+}
+
 type loadedRuleStrategy struct {
 	strategy ruleStrategy
 	digest   string
+	content  ruleContentDigest
 }
 
 type ruleSetProvider struct {
@@ -104,8 +110,9 @@ type ruleSetProvider struct {
 
 type RuleSetProvider struct {
 	*ruleSetProvider
-	readyMu     sync.RWMutex
-	readyDigest string
+	readyMu      sync.RWMutex
+	readyDigest  string
+	readyContent ruleContentDigest
 }
 
 func (rp *RuleSetProvider) Format() P.RuleFormat {
@@ -215,8 +222,16 @@ func NewRuleSetProvider(name string, behavior P.RuleBehavior, format P.RuleForma
 		wrapper.readyMu.Lock()
 		rp.strategy = loaded.strategy
 		wrapper.readyDigest = loaded.digest
+		wrapper.readyContent = loaded.content
 		wrapper.readyMu.Unlock()
-		tunnel.RuleUpdateCallback().Emit(P.RuleUpdate{Name: rp.Name(), Strategy: loaded.strategy})
+		if tunnel == nil {
+			return
+		}
+		providers, release := tunnel.AcquireRuleProviders()
+		defer release()
+		if providers[rp.Name()] == wrapper {
+			tunnel.RuleUpdateCallback().Emit(P.RuleUpdate{Name: rp.Name(), Strategy: loaded.strategy})
+		}
 	}
 
 	rp.strategy = newStrategy(behavior, parse)
@@ -233,6 +248,15 @@ func NewRuleSetProvider(name string, behavior P.RuleBehavior, format P.RuleForma
 		var sidecarSnapshot []byte
 		if maxLowMemoryRuleCount > 0 && format != P.MrsRule {
 			sidecarSnapshot, sidecarErr = os.ReadFile(sidecarPath(vehicle.Path()))
+		}
+		var content ruleContentDigest
+		if maxLowMemoryRuleCount > 0 {
+			content = ruleContentDigest{raw: sha256.Sum256(bytes), sidecar: sha256.Sum256(sidecarSnapshot)}
+			if loaded, ok := reuseActiveStrategy(name, behavior, format, content); ok {
+				return loaded, nil
+			}
+		}
+		if maxLowMemoryRuleCount > 0 && format != P.MrsRule {
 			if sidecarErr == nil {
 				strategy, err := loadFromSidecarBytes(sidecarSnapshot, bytes, behavior)
 				if err == nil {
@@ -240,6 +264,7 @@ func NewRuleSetProvider(name string, behavior P.RuleBehavior, format P.RuleForma
 					return loadedRuleStrategy{
 						strategy: strategy,
 						digest:   extensionReadyDigest(behavior, format, strategy.Count(), bytes, sidecarSnapshot),
+						content:  content,
 					}, nil
 				}
 				sidecarErr = err
@@ -274,6 +299,7 @@ func NewRuleSetProvider(name string, behavior P.RuleBehavior, format P.RuleForma
 		return loadedRuleStrategy{
 			strategy: strategy,
 			digest:   extensionReadyDigest(behavior, format, strategy.Count(), bytes, sidecarSnapshot),
+			content:  content,
 		}, nil
 	}, onUpdate)
 

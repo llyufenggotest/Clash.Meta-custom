@@ -28,18 +28,18 @@ require (
 	github.com/metacubex/jls-tls v0.0.0-20260723084315-67adc0e2f796
 	github.com/metacubex/kcp-go v0.0.0-20260105040817-550693377604
 	github.com/metacubex/mhurl v0.1.0
-	github.com/metacubex/mipstack v0.0.0-20260919101445-802d64336f8c
+	github.com/metacubex/mipstack v0.0.0-20260926151545-332a03e253ef
 	github.com/metacubex/mlkem v0.1.0
 	github.com/metacubex/quic-go v0.61.1-0.20260727080200-2548683b76f4
 	github.com/metacubex/randv2 v0.2.0
 	github.com/metacubex/restls-client-go v0.1.9
 	github.com/metacubex/sevenzip v1.6.4
-	github.com/metacubex/sing v0.5.7
+	github.com/metacubex/sing v0.5.8
 	github.com/metacubex/sing-mux v0.3.10
 	github.com/metacubex/sing-quic v0.0.0-20260904234848-1c242664697a
 	github.com/metacubex/sing-shadowsocks v0.2.13
 	github.com/metacubex/sing-shadowsocks2 v0.2.8
-	github.com/metacubex/sing-tun v0.4.24
+	github.com/metacubex/sing-tun v0.4.26
 	github.com/metacubex/sing-vmess v0.2.5
 	github.com/metacubex/sing-wireguard v0.0.0-20260826105301-c3ae17d19f9e
 	github.com/metacubex/smux v0.0.0-20260105030934-d0c8756d3141
@@ -110,7 +110,7 @@ require (
 	github.com/klauspost/reedsolomon v1.12.3 // indirect
 	github.com/mdlayher/socket v0.7.0 // indirect
 	github.com/metacubex/ascon v0.1.0 // indirect
-	github.com/metacubex/gvisor v0.0.0-20260826100401-79317d808312 // indirect
+	github.com/metacubex/gvisor v0.0.0-20260922041103-e2cbcd6e7400 // indirect
 	github.com/metacubex/hkdf v0.1.0 // indirect
 	github.com/metacubex/hpke v0.1.0 // indirect
 	github.com/metacubex/jsonv2 v0.0.0-20260721082349-16b4998c8f89 // indirect
@@ -149,6 +149,5 @@ require (
 
 // for https://github.com/golang/protobuf/issues/1704
 replace google.golang.org/protobuf => github.com/metacubex/protobuf-go v0.0.0-20260306035419-7ceee0674686
-
 
 replace github.com/metacubex/sing-shadowsocks2 => ../sing-shadowsocks2

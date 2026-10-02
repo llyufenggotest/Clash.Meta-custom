@@ -400,10 +400,13 @@ func (s *Snell) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.Conn
 			_ = c.Close()
 			return nil, err
 		}
-		// The destination header is committed. A missing reply does not prove
-		// the server ignored it, so return read failures without replaying it.
 		if poolConn, ok := c.(*snell.PoolConn); ok {
 			poolConn.MarkReusable()
+			if poolConn.Reused() {
+				c = snell.NewRetryConn(c, func(ctx context.Context) (net.Conn, error) {
+					return s.redialPooled(ctx, metadata)
+				})
+			}
 		}
 		return NewConn(c, s), nil
 	}
@@ -419,6 +422,24 @@ func (s *Snell) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.Conn
 
 	c, err = s.StreamConnContext(ctx, c, metadata)
 	return NewConn(c, s), err
+}
+
+// redialPooled starts metadata's request on a connection dialed for it, after
+// the reused one failed before anything but the request had been sent.
+func (s *Snell) redialPooled(ctx context.Context, metadata *C.Metadata) (net.Conn, error) {
+	log.Debugln("[Snell] %s pooled connection failed before sending business data, dialing a new one", s.addr)
+	ctx, cancel := context.WithTimeout(ctx, C.DefaultTCPTimeout)
+	defer cancel()
+	c, err := s.pool.Dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err = s.writeHeaderContext(ctx, c, metadata); err != nil {
+		_ = c.Close()
+		return nil, err
+	}
+	c.MarkReusable()
+	return c, nil
 }
 
 // ListenPacketContext implements C.ProxyAdapter

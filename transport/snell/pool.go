@@ -66,8 +66,17 @@ func (p *Pool) GetContext(ctx context.Context) (net.Conn, error) {
 		}
 
 		entry.uses++
-		return &PoolConn{Snell: entry.conn, pool: p, uses: entry.uses}, nil
+		return &PoolConn{Snell: entry.conn, pool: p, uses: entry.uses, reused: entry.idle != nil}, nil
 	}
+}
+
+// Dial opens a connection for one request without taking an idle one.
+func (p *Pool) Dial(ctx context.Context) (*PoolConn, error) {
+	conn, err := p.factory(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &PoolConn{Snell: conn, pool: p, uses: 1}, nil
 }
 
 func (p *Pool) Put(conn *Snell) {
@@ -101,6 +110,7 @@ type PoolConn struct {
 	*Snell
 	pool           *Pool
 	uses           int
+	reused         bool
 	closeWriteOnce sync.Once
 	closeWriteErr  error
 	requestStarted atomic.Bool
@@ -125,6 +135,12 @@ func (pc *PoolConn) Write(b []byte) (int, error) {
 		pc.requestStarted.Store(true)
 	}
 	return n, err
+}
+
+// Reused reports whether the connection waited idle in the pool before this
+// request, rather than being dialed for it.
+func (pc *PoolConn) Reused() bool {
+	return pc.reused
 }
 
 func (pc *PoolConn) MarkReusable() {

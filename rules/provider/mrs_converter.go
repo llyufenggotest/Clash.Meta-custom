@@ -32,54 +32,61 @@ func ConvertToMrs(buf []byte, behavior P.RuleBehavior, format P.RuleFormat, w io
 			})
 			return nil
 		}
-
-		var encoder *zstd.Encoder
-		encoder, err = zstd.NewWriter(w)
-		if err != nil {
-			return err
-		}
-		defer func() {
-			zstdErr := encoder.Close()
-			if err == nil {
-				err = zstdErr
-			}
-		}()
-
-		// header
-		_, err = encoder.Write(MrsMagicBytes[:])
-		if err != nil {
-			return err
-		}
-
-		// behavior
-		_behavior := []byte{behavior.Byte()}
-		_, err = encoder.Write(_behavior[:])
-		if err != nil {
-			return err
-		}
-
-		// count
-		count := int64(_strategy.Count())
-		err = binary.Write(encoder, binary.BigEndian, count)
-		if err != nil {
-			return err
-		}
-
-		// extra (reserved for future using)
-		var extra []byte
-		err = binary.Write(encoder, binary.BigEndian, int64(len(extra)))
-		if err != nil {
-			return err
-		}
-		_, err = encoder.Write(extra)
-		if err != nil {
-			return err
-		}
-
-		return _strategy.WriteMrs(encoder)
+		return WriteMrsFromStrategy(w, behavior, _strategy)
 	} else {
 		return ErrInvalidFormat
 	}
+}
+
+// WriteMrsFromStrategy serialises an already-built strategy in MRS format. It is
+// split out of ConvertToMrs so a caller that has just built a matcher (and paid
+// the trie construction cost) can persist the finished bitmap without parsing
+// the source text a second time.
+func WriteMrsFromStrategy(w io.Writer, behavior P.RuleBehavior, strategy mrsRuleStrategy) (err error) {
+	var encoder *zstd.Encoder
+	encoder, err = zstd.NewWriter(w)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		zstdErr := encoder.Close()
+		if err == nil {
+			err = zstdErr
+		}
+	}()
+
+	// header
+	_, err = encoder.Write(MrsMagicBytes[:])
+	if err != nil {
+		return err
+	}
+
+	// behavior
+	_behavior := []byte{behavior.Byte()}
+	_, err = encoder.Write(_behavior[:])
+	if err != nil {
+		return err
+	}
+
+	// count
+	count := int64(strategy.Count())
+	err = binary.Write(encoder, binary.BigEndian, count)
+	if err != nil {
+		return err
+	}
+
+	// extra (reserved for future using)
+	var extra []byte
+	err = binary.Write(encoder, binary.BigEndian, int64(len(extra)))
+	if err != nil {
+		return err
+	}
+	_, err = encoder.Write(extra)
+	if err != nil {
+		return err
+	}
+
+	return strategy.WriteMrs(encoder)
 }
 
 func ConvertMain(args []string) {

@@ -180,8 +180,20 @@ func ParseRuleFormat(s string) (format RuleFormat, err error) {
 	return
 }
 
+type RuleUpdate struct {
+	Name     string
+	Strategy any
+}
+
+type RuleSnapshotLease interface {
+	RuleProviders() map[string]RuleProvider
+	Release()
+}
+
 type Tunnel interface {
 	Providers() map[string]ProxyProvider
 	RuleProviders() map[string]RuleProvider
-	RuleUpdateCallback() *utils.Callback[RuleProvider]
+	AcquireRuleProviders() (map[string]RuleProvider, func())
+	AcquireRuleSnapshot() RuleSnapshotLease
+	RuleUpdateCallback() *utils.Callback[RuleUpdate]
 }

@@ -169,7 +169,10 @@ func NewAnyTLS(option AnyTLSOption) (*AnyTLS, error) {
 	}
 	tOption.TLSConfig = tlsConfig
 
-	client := anytls.NewClient(context.TODO(), tOption)
+	client, err := anytls.NewClient(context.TODO(), tOption)
+	if err != nil {
+		return nil, err
+	}
 	outbound.client = client
 
 	return outbound, nil

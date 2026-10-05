@@ -21,18 +21,31 @@ func (rs *RuleSet) RuleType() C.RuleType {
 }
 
 func (rs *RuleSet) Match(metadata *C.Metadata, helper C.RuleMatchHelper) (bool, string) {
-	if provider, ok := rs.getProvider(); ok {
-		if rs.isSrc {
-			metadata.SwapSrcDst()
-			defer metadata.SwapSrcDst()
-
-			helper.ResolveIP = nil // src mode should not resolve ip
-		} else if rs.noResolveIP {
-			helper.ResolveIP = nil
+	if helper.LookupRuleProvider != nil {
+		if provider, ok := helper.LookupRuleProvider(rs.ruleProviderName); ok {
+			return rs.matchProvider(provider, metadata, helper), rs.adapter
 		}
-		return provider.Match(metadata, helper), rs.adapter
+		return false, ""
+	}
+
+	providers, release := tunnel.AcquireRuleProviders()
+	defer release()
+	if provider, ok := rs.getProvider(providers); ok {
+		return rs.matchProvider(provider, metadata, helper), rs.adapter
 	}
 	return false, ""
+}
+
+func (rs *RuleSet) matchProvider(provider C.RuleProviderMatcher, metadata *C.Metadata, helper C.RuleMatchHelper) bool {
+	if rs.isSrc {
+		metadata.SwapSrcDst()
+		defer metadata.SwapSrcDst()
+
+		helper.ResolveIP = nil // src mode should not resolve ip
+	} else if rs.noResolveIP {
+		helper.ResolveIP = nil
+	}
+	return provider.Match(metadata, helper)
 }
 
 // MatchDomain implements C.DomainMatcher
@@ -59,8 +72,8 @@ func (rs *RuleSet) ProviderNames() []string {
 	return []string{rs.ruleProviderName}
 }
 
-func (rs *RuleSet) getProvider() (P.RuleProvider, bool) {
-	pp, ok := tunnel.RuleProviders()[rs.ruleProviderName]
+func (rs *RuleSet) getProvider(providers map[string]P.RuleProvider) (P.RuleProvider, bool) {
+	pp, ok := providers[rs.ruleProviderName]
 	return pp, ok
 }
 

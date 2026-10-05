@@ -121,9 +121,10 @@ func ruleProviderRouter() http.Handler {
 }
 
 func getRuleProviders(w http.ResponseWriter, r *http.Request) {
-	ruleProviders := tunnel.RuleProviders()
+	lease := tunnel.AcquireRuleSnapshot()
+	defer lease.Release()
 	render.JSON(w, r, render.M{
-		"providers": ruleProviders,
+		"providers": lease.RuleProviders(),
 	})
 }
 
@@ -148,15 +149,17 @@ func parseRuleProviderName(next http.Handler) http.Handler {
 func findRuleProviderByName(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := r.Context().Value(CtxKeyProviderName).(string)
-		providers := tunnel.RuleProviders()
-		provider, exist := providers[name]
+		lease := tunnel.AcquireRuleSnapshot()
+		provider, exist := lease.RuleProviders()[name]
 		if !exist {
+			lease.Release()
 			render.Status(r, http.StatusNotFound)
 			render.JSON(w, r, ErrNotFound)
 			return
 		}
 
 		ctx := context.WithValue(r.Context(), CtxKeyProvider, provider)
+		defer lease.Release()
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

@@ -73,6 +73,10 @@ func (r IPReader) LookupCode(ipAddress net.IP) []string {
 }
 
 func (r ASNReader) LookupASN(ip net.IP) (string, string) {
+	// A zero ASNReader is returned on builds that skip mapping the database.
+	if r.Reader == nil {
+		return "", ""
+	}
 	switch r.Metadata.DatabaseType {
 	case "GeoLite2-ASN", "DBIP-ASN-Lite (compat=GeoLite2-ASN)":
 		var result GeoLite2

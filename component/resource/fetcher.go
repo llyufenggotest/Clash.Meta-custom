@@ -2,6 +2,7 @@ package resource
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -51,6 +52,23 @@ func (f *Fetcher[V]) VehicleType() P.VehicleType {
 
 func (f *Fetcher[V]) UpdatedAt() time.Time {
 	return f.updatedAt
+}
+
+// InitialLocal admits only prepared disk content. It deliberately does not fall
+// back to network/bundle after a parse failure, preserving the actionable cause.
+func (f *Fetcher[V]) InitialLocal() (V, error) {
+	buf, err := os.ReadFile(f.vehicle.Path())
+	if err != nil {
+		return lo.Empty[V](), fmt.Errorf("prepared rules unavailable; prepare in app: %w", err)
+	}
+	contents, _, err := f.loadBuf(buf, utils.MakeHash(buf), false)
+	if err != nil {
+		return lo.Empty[V](), err
+	}
+	if err = f.startPullLoop(false); err != nil {
+		return lo.Empty[V](), err
+	}
+	return contents, nil
 }
 
 func (f *Fetcher[V]) Initial() (V, error) {

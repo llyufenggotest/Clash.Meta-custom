@@ -120,7 +120,10 @@ func StreamTLSConn(ctx context.Context, conn net.Conn, cfg *TLSConfig) (net.Conn
 		if err != nil {
 			return nil, err
 		}
-		tlsConn := tlsC.UClient(conn, tlsConfig, clientFingerprint)
+		tlsConn, err := tlsC.NewECHUClient(conn, tlsConfig, clientFingerprint)
+		if err != nil {
+			return nil, err
+		}
 		err = tlsConn.HandshakeContext(ctx)
 		if err != nil {
 			return nil, err

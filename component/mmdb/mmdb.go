@@ -73,7 +73,15 @@ func IPInstance() IPReader {
 	return ipReader
 }
 
+// ASNInstance returns the ASN database reader, mapping the file on first use.
+//
+// On builds where ASN rules can never be enabled the mapping is skipped and a
+// zero reader is returned. Callers must therefore tolerate an unloaded reader;
+// ASNReader.LookupASN and the updater's Close path both do.
 func ASNInstance() ASNReader {
+	if !asnMappingAllowed {
+		return ASNReader{}
+	}
 	asnOnce.Do(func() {
 		ASNPath := C.Path.ASN()
 		log.Infoln("Load ASN file: %s", ASNPath)

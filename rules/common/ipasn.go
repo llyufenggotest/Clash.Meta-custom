@@ -1,6 +1,8 @@
 package common
 
 import (
+	"fmt"
+
 	"github.com/metacubex/mihomo/component/geodata"
 	"github.com/metacubex/mihomo/component/mmdb"
 	C "github.com/metacubex/mihomo/constant"
@@ -61,6 +63,16 @@ func NewIPASN(asn string, adapter string, isSrc, noResolveIP bool) (*ASN, error)
 	if err := geodata.InitASN(); err != nil {
 		log.Errorln("can't initial ASN: %s", err)
 		return nil, err
+	}
+
+	// InitASN reports success while leaving the feature disabled on low-memory
+	// builds. Building the rule anyway would be worse than dropping it: the rule
+	// can never match, but its first Match call mmaps the whole ASN database.
+	// On iOS that mapping is charged to phys_footprint against a ~50 MB budget,
+	// so a rule that is guaranteed useless would cost the process its life.
+	// Refuse here; callers treat the error as "skip this rule" and keep going.
+	if !geodata.ASNEnable() {
+		return nil, fmt.Errorf("ASN rule %s ignored: ASN database is disabled on this build", asn)
 	}
 
 	return &ASN{

@@ -4,7 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
+	"errors"
+	"fmt"
 	"net"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -38,10 +42,30 @@ type Client struct {
 	padding        atomic.Pointer[padding.PaddingFactory]
 }
 
-func NewClient(ctx context.Context, config ClientConfig) *Client {
-	pw := sha256.Sum256([]byte(config.Password))
+func decodeClientPassword(password string) ([]byte, error) {
+	const marker = "#sl"
+	if strings.HasSuffix(strings.ToLower(password), marker) {
+		raw := password[:len(password)-len(marker)]
+		if len(raw) != sha256.Size*2 {
+			return nil, errors.New("anytls: Shanlian password must be 64 hexadecimal characters before #sl")
+		}
+		decoded, err := hex.DecodeString(raw)
+		if err != nil {
+			return nil, fmt.Errorf("anytls: invalid Shanlian hexadecimal password: %w", err)
+		}
+		return decoded, nil
+	}
+	hash := sha256.Sum256([]byte(password))
+	return hash[:], nil
+}
+
+func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
+	password, err := decodeClientPassword(config.Password)
+	if err != nil {
+		return nil, err
+	}
 	c := &Client{
-		passwordSha256: pw[:],
+		passwordSha256: password,
 		tlsConfig:      config.TLSConfig,
 		dialer:         config.Dialer,
 		server:         config.Server,
@@ -49,7 +73,7 @@ func NewClient(ctx context.Context, config ClientConfig) *Client {
 	// Initialize the padding state of this client
 	padding.UpdatePaddingScheme(padding.DefaultPaddingScheme, &c.padding)
 	c.sessionClient = session.NewClient(ctx, c.createOutboundTLSConnection, &c.padding, config.ClientMetadata, config.IdleSessionCheckInterval, config.IdleSessionTimeout, config.MinIdleSession, config.DisableReuse)
-	return c
+	return c, nil
 }
 
 func (c *Client) CreateProxy(ctx context.Context, destination M.Socksaddr) (net.Conn, error) {

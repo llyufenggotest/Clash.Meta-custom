@@ -7,9 +7,11 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/metacubex/mihomo/common/atomic"
+	"github.com/metacubex/mihomo/common/probelimit"
 	"github.com/metacubex/mihomo/common/queue"
 	"github.com/metacubex/mihomo/common/utils"
 	"github.com/metacubex/mihomo/common/xsync"
@@ -33,9 +35,11 @@ type internalProxyState struct {
 
 type Proxy struct {
 	C.ProxyAdapter
-	alive   atomic.Bool
-	history *queue.Queue[C.DelayHistory]
-	extra   xsync.Map[string, *internalProxyState]
+	alive      atomic.Bool
+	history    *queue.Queue[C.DelayHistory]
+	extra      xsync.Map[string, *internalProxyState]
+	historyMu  sync.Mutex
+	extraOrder []string
 }
 
 // Adapter implements C.Proxy
@@ -164,13 +168,27 @@ func (p *Proxy) MarshalJSON() ([]byte, error) {
 // URLTest get the delay for the specified URL
 // implements C.Proxy
 func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.IntRanges[uint16]) (t uint16, err error) {
+	if probelimit.Enabled {
+		var release func()
+		ctx, release, err = probelimit.Default.Acquire(ctx)
+		if err != nil {
+			return 0, err
+		}
+		defer release()
+	}
 	var satisfied bool
 
 	defer func() {
+		// Cancellation is not evidence that the node is unhealthy.
+		if probelimit.Enabled && ctx.Err() == context.Canceled {
+			return
+		}
 		if UrlTestHook != nil {
 			UrlTestHook(url, p.Name(), t)
 		}
 
+		p.historyMu.Lock()
+		defer p.historyMu.Unlock()
 		alive := err == nil
 		record := C.DelayHistory{Time: time.Now()}
 		if alive {
@@ -183,6 +201,19 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 			p.history.Pop()
 		}
 
+		// Retain the 16 most recently completed test URLs, not every URL
+		// ever supplied during this proxy's lifetime. Serialize history writes.
+		for i, key := range p.extraOrder {
+			if key == url {
+				p.extraOrder = append(p.extraOrder[:i], p.extraOrder[i+1:]...)
+				break
+			}
+		}
+		if len(p.extraOrder) >= 16 {
+			p.extra.Delete(p.extraOrder[0])
+			p.extraOrder = p.extraOrder[1:]
+		}
+		p.extraOrder = append(p.extraOrder, url)
 		state, _ := p.extra.LoadOrStoreFn(url, func() *internalProxyState {
 			return &internalProxyState{
 				history: queue.New[C.DelayHistory](defaultHistoriesNum),

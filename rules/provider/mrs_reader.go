@@ -14,7 +14,11 @@ var MrsMagicBytes = [4]byte{'M', 'R', 'S', 1} // MRSv1
 
 func rulesMrsParse(buf []byte, strategy ruleStrategy) (ruleStrategy, error) {
 	if _strategy, ok := strategy.(mrsRuleStrategy); ok {
-		reader, err := zstd.NewReader(bytes.NewReader(buf))
+		var options []zstd.DOption
+		if maxLowMemoryRuleCount > 0 {
+			options = append(options, zstd.WithDecoderConcurrency(1))
+		}
+		reader, err := zstd.NewReader(bytes.NewReader(buf), options...)
 		if err != nil {
 			return nil, err
 		}
@@ -46,6 +50,13 @@ func rulesMrsParse(buf []byte, strategy ruleStrategy) (ruleStrategy, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		// No budget check here on purpose. The rule-count cap exists to prevent
+		// the trie construction spike (NewDomainSet materialising and sorting
+		// every domain), and the MRS path does none of that: FromMrs reads a
+		// pre-built succinct bitmap into three slices. Measured on BanAD
+		// (187,945 rules): ~190 MB via the trie, 18 MB via MRS. Capping here
+		// would reject exactly the artifact that makes big lists affordable.
 
 		// extra (reserved for future using)
 		var length int64

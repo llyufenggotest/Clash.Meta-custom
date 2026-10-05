@@ -123,7 +123,7 @@ func TestMihomo_TrojanWebsocket(t *testing.T) {
 	testSuit(t, proxy)
 }
 
-func TestMihomo_TrojanXTLS(t *testing.T) {
+func TestMihomo_TrojanXrayTLS(t *testing.T) {
 	cfg := &container.Config{
 		Image:        ImageXray,
 		ExposedPorts: defaultExposedPorts,
@@ -152,8 +152,6 @@ func TestMihomo_TrojanXTLS(t *testing.T) {
 		SkipCertVerify: true,
 		UDP:            true,
 		Network:        "tcp",
-		Flow:           "xtls-rprx-direct",
-		FlowShow:       true,
 	})
 	if err != nil {
 		require.NoError(t, err)

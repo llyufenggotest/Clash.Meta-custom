@@ -8,16 +8,15 @@
                 "clients": [
                     {
                         "password": "example",
-                        "email": "xtls@example.com",
-                        "flow": "xtls-rprx-direct",
+                        "email": "tls@example.com",
                         "level": 0
                     }
                 ]
             },
             "streamSettings": {
                 "network": "tcp",
-                "security": "xtls",
-                "xtlsSettings": {
+                "security": "tls",
+                "tlsSettings": {
                     "certificates": [
                         {
                             "certificateFile": "/etc/ssl/v2ray/fullchain.pem",

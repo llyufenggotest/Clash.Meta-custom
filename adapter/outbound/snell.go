@@ -15,6 +15,7 @@ import (
 	"github.com/metacubex/mihomo/common/structure"
 	"github.com/metacubex/mihomo/component/ech"
 	"github.com/metacubex/mihomo/component/ech/echparser"
+	"github.com/metacubex/mihomo/component/oixdnsauth"
 	tlsC "github.com/metacubex/mihomo/component/tls"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
@@ -465,8 +466,29 @@ func (s *Snell) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (
 	return NewPacketConn(pc, s), nil
 }
 
+// transportAddress signs only the Oix managed endpoint, leaving stored server,
+// TLS SNI, target metadata, ordinary Snell and unmanaged/IP servers unchanged.
+func (s *Snell) transportAddress() (string, error) {
+	if !s.oix {
+		return s.addr, nil
+	}
+	host, port, err := net.SplitHostPort(s.addr)
+	if err != nil {
+		return "", err
+	}
+	authenticated, err := oixdnsauth.Host(host, oixdnsauth.BuildSeed, []string{"cloud-nodes.com"}, time.Now().Unix())
+	if err != nil {
+		return "", err
+	}
+	return net.JoinHostPort(authenticated, port), nil
+}
+
 func (s *Snell) dialSnellTransport(ctx context.Context) (net.Conn, error) {
-	c, err := s.dialer.DialContext(ctx, "tcp", s.addr)
+	addr, err := s.transportAddress()
+	if err != nil {
+		return nil, err
+	}
+	c, err := s.dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("%s connect error: %w", s.addr, err)
 	}

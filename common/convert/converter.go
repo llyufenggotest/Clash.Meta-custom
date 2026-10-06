@@ -51,6 +51,52 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 
 		scheme = strings.ToLower(scheme)
 		switch scheme {
+		case "oppa":
+			link, err := url.Parse(line)
+			if err != nil || link.User == nil || link.Hostname() == "" {
+				continue
+			}
+			port, err := strconv.Atoi(link.Port())
+			if err != nil || port < 1 || port > 65535 {
+				continue
+			}
+			password, err := url.PathUnescape(link.User.String())
+			if err != nil || len(password) == 0 || len(password) > 4096 {
+				continue
+			}
+			query := link.Query()
+			if query.Get("pin_sha256") != "" {
+				continue
+			}
+			insecure := false
+			if value := query.Get("insecure"); value != "" {
+				insecure, err = strconv.ParseBool(value)
+				if err != nil {
+					continue
+				}
+			}
+			preConnect := 8
+			if value := query.Get("preconnect"); value != "" {
+				parsed, parseErr := strconv.Atoi(value)
+				if parseErr == nil && parsed > 0 {
+					preConnect = min(parsed, 64)
+				}
+			}
+			name := link.Fragment
+			if name == "" {
+				name = link.Host
+			}
+			proxy := map[string]any{
+				"name": uniqueName(names, name), "type": "oppa",
+				"server": link.Hostname(), "port": port,
+				"password": password, "skip-cert-verify": insecure,
+				"pre-connect": preConnect, "udp": true,
+			}
+			if sni := query.Get("sni"); sni != "" {
+				proxy["sni"] = sni
+			}
+			proxies = append(proxies, proxy)
+
 		case "wg":
 			link, err := url.Parse(line)
 			if err != nil || link.Hostname() == "" || link.Port() == "" {

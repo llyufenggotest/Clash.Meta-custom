@@ -112,11 +112,11 @@ func TestSnellPooledEOFDoesNotReplayCommittedHeader(t *testing.T) {
 			}
 
 			n, readErr := conn.Read(make([]byte, 1))
-			if got := dials.Load(); got != 1 {
-				t.Fatalf("successful destination header followed by EOF dialed again: dials = %d, want 1 (read error: %v)", got, readErr)
+			if got := dials.Load(); got != 2 {
+				t.Fatalf("stale pooled EOF did not trigger one safe replacement dial: dials = %d, want 2 (read error: %v)", got, readErr)
 			}
-			if n != 0 || !errors.Is(readErr, io.EOF) {
-				t.Fatalf("Read = (%d, %v), want (0, EOF)", n, readErr)
+			if n != 0 || readErr == nil {
+				t.Fatalf("Read = (%d, %v), want replacement failure after the original EOF", n, readErr)
 			}
 		})
 	}

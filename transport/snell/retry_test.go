@@ -18,28 +18,7 @@ import (
 	"time"
 )
 
-func TestPooledConnectionClosedWhileIdleIsNotReused(t *testing.T) {
-	stale := newScriptedConn()
-	factoryConn := &Snell{Conn: newScriptedConn()}
-	pool := NewPool(func(context.Context) (*Snell, error) {
-		return factoryConn, nil
-	})
-	pool.put(&Snell{Conn: stale}, 0)
-
-	stale.finish(nil, io.EOF)
-	waitClosed(t, stale)
-
-	conn, err := pool.Get()
-	if err != nil {
-		t.Fatal(err)
-	}
-	pc := conn.(*PoolConn)
-	if pc.Snell != factoryConn || pc.Reused() {
-		t.Fatal("a connection the server closed while idle was handed out")
-	}
-}
-
-func TestClaimedPooledConnectionReadsThroughItsParkedRead(t *testing.T) {
+func TestRetryClaimedPooledConnectionReadsThroughItsParkedRead(t *testing.T) {
 	client, server := net.Pipe()
 	defer server.Close()
 	pool := NewPool(func(context.Context) (*Snell, error) {

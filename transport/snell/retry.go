@@ -48,8 +48,14 @@ func NewRetryConn(conn net.Conn, redial func(context.Context) (net.Conn, error))
 func (c *RetryConn) Read(b []byte) (int, error) {
 	conn := c.current()
 	n, err := conn.Read(b)
-	if n > 0 || err == nil || answered(conn) || !connectionGone(err) {
+	if n > 0 || answered(conn) || !connectionGone(err) {
 		c.settle(conn)
+		return n, err
+	}
+	c.mu.Lock()
+	settled := c.settled
+	c.mu.Unlock()
+	if settled {
 		return n, err
 	}
 	fresh, err := c.replace(conn, err)

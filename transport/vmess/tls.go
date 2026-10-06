@@ -14,24 +14,27 @@ import (
 	"github.com/metacubex/mihomo/transport/tlsmirror"
 
 	"github.com/metacubex/tls"
+	utls "github.com/metacubex/utls"
 )
 
 type TLSConfig struct {
-	Host              string
-	SkipCertVerify    bool
-	NameCertVerify    string
-	FingerPrint       string
-	Certificate       string
-	PrivateKey        string
-	ClientFingerprint string
-	NextProtos        []string
-	ECH               *ech.Config
-	ShadowTLS         *shadowtls.Config
-	Restls            *restls.Config
-	JLS               *jls.Config
-	Reality           *tlsC.RealityConfig
-	TLSMirror         *tlsmirror.Config
-	TLSMirrorDialer   tlsmirror.EnrollmentDialer
+	Host                string
+	SkipCertVerify      bool
+	NameCertVerify      string
+	FingerPrint         string
+	Certificate         string
+	PrivateKey          string
+	ClientFingerprint   string
+	NextProtos          []string
+	ECH                 *ech.Config
+	ClientSessionCache  tls.ClientSessionCache
+	UClientSessionCache utls.ClientSessionCache
+	ShadowTLS           *shadowtls.Config
+	Restls              *restls.Config
+	JLS                 *jls.Config
+	Reality             *tlsC.RealityConfig
+	TLSMirror           *tlsmirror.Config
+	TLSMirrorDialer     tlsmirror.EnrollmentDialer
 }
 
 func (cfg *TLSConfig) ToStdConfig() (*tls.Config, error) {
@@ -40,6 +43,7 @@ func (cfg *TLSConfig) ToStdConfig() (*tls.Config, error) {
 			ServerName:         cfg.Host,
 			InsecureSkipVerify: cfg.SkipCertVerify,
 			NextProtos:         cfg.NextProtos,
+			ClientSessionCache: cfg.ClientSessionCache,
 		},
 		Fingerprint:    cfg.FingerPrint,
 		NameCertVerify: cfg.NameCertVerify,
@@ -116,6 +120,7 @@ func StreamTLSConn(ctx context.Context, conn net.Conn, cfg *TLSConfig) (net.Conn
 			return tlsC.GetRealityConn(ctx, conn, clientFingerprint, tlsConfig.ServerName, cfg.Reality)
 		}
 		tlsConfig := tlsC.UConfig(tlsConfig)
+		tlsConfig.ClientSessionCache = cfg.UClientSessionCache
 		err = cfg.ECH.ClientHandleUTLS(ctx, tlsConfig)
 		if err != nil {
 			return nil, err

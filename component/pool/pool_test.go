@@ -71,3 +71,23 @@ func TestPool_MaxAge(t *testing.T) {
 	elm, _ = pool.Get()
 	assert.Equal(t, 1, elm)
 }
+
+func TestPool_CloseEvictsQueuedItemsAndRejectsReuse(t *testing.T) {
+	g := lg()
+	evicted := make([]int, 0, 2)
+	pool := New[int](g, WithSize[int](2), WithEvict(func(item int) {
+		evicted = append(evicted, item)
+	}))
+
+	first, _ := pool.Get()
+	second, _ := pool.Get()
+	pool.Put(first)
+	pool.Put(second)
+	assert.NoError(t, pool.Close())
+	assert.ElementsMatch(t, []int{first, second}, evicted)
+
+	_, err := pool.Get()
+	assert.ErrorIs(t, err, ErrClosed)
+	pool.Put(3)
+	assert.Contains(t, evicted, 3)
+}

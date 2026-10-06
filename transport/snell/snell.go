@@ -144,7 +144,7 @@ func WriteHeaderWithReuse(conn net.Conn, host string, port uint, version int, re
 	buf.WriteString(host)
 	binary.Write(buf, binary.BigEndian, uint16(port))
 
-	if _, err := conn.Write(buf.Bytes()); err != nil {
+	if err := writeFull(conn, buf.Bytes()); err != nil {
 		return err
 	}
 
@@ -157,8 +157,15 @@ func WriteUDPHeader(conn net.Conn, version int) error {
 	}
 
 	// version, command, clientID length
-	_, err := conn.Write([]byte{Version, CommandUDP, 0x00})
-	return err
+	count := []byte{Version, CommandUDP, 0x00}
+	n, err := conn.Write(count)
+	if err != nil {
+		return err
+	}
+	if n != len(count) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 func writeZeroChunk(conn net.Conn) error {

@@ -5,11 +5,25 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/metacubex/mihomo/transport/shadowsocks/shadowaead"
 )
+
+func TestPoolWarmCreatesRequestedConnections(t *testing.T) {
+	created := 0
+	pool := NewPool(func(context.Context) (*Snell, error) {
+		created++
+		return &Snell{Conn: &recordingConn{}}, nil
+	})
+
+	pool.Warm(context.Background(), 3)
+	if created != 3 {
+		t.Fatalf("created = %d, want 3", created)
+	}
+}
 
 func TestPoolConnCloseIsIdempotent(t *testing.T) {
 	rawConn := &recordingConn{
@@ -36,18 +50,18 @@ func TestPoolConnCloseIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if rawConn.writes != 2 {
-		t.Fatalf("close should send the request and one half-close record, got %d writes", rawConn.writes)
+	if rawConn.writes.Load() != 2 {
+		t.Fatalf("close should send the request and one half-close record, got %d writes", rawConn.writes.Load())
 	}
-	if rawConn.reads != 2 {
-		t.Fatalf("close should observe the peer half-close before pooling, got %d reads", rawConn.reads)
+	if rawConn.reads.Load() != 2 {
+		t.Fatalf("close should observe the peer half-close before pooling, got %d reads", rawConn.reads.Load())
 	}
 
 	got, err := pool.pool.Get()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != pooledConn {
+	if got.conn != pooledConn {
 		t.Fatal("pooled connection mismatch")
 	}
 }
@@ -68,10 +82,10 @@ func TestPoolConnCloseBeforeRequestClosesRawConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if rawConn.writes != 0 {
-		t.Fatalf("close before request should not send half-close record, got %d writes", rawConn.writes)
+	if rawConn.writes.Load() != 0 {
+		t.Fatalf("close before request should not send half-close record, got %d writes", rawConn.writes.Load())
 	}
-	if !rawConn.closed {
+	if !rawConn.closed.Load() {
 		t.Fatal("close before request should close the raw connection")
 	}
 
@@ -79,7 +93,7 @@ func TestPoolConnCloseBeforeRequestClosesRawConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != factoryConn {
+	if got.conn != factoryConn {
 		t.Fatal("unstarted connection should not be returned to the pool")
 	}
 }
@@ -100,10 +114,10 @@ func TestPoolConnCloseAfterRequestBeforeReusableClosesRawConnection(t *testing.T
 		t.Fatal(err)
 	}
 
-	if rawConn.writes != 1 {
-		t.Fatalf("close before reusable should only send the request, got %d writes", rawConn.writes)
+	if rawConn.writes.Load() != 1 {
+		t.Fatalf("close before reusable should only send the request, got %d writes", rawConn.writes.Load())
 	}
-	if !rawConn.closed {
+	if !rawConn.closed.Load() {
 		t.Fatal("close before reusable should close the raw connection")
 	}
 
@@ -111,7 +125,7 @@ func TestPoolConnCloseAfterRequestBeforeReusableClosesRawConnection(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != factoryConn {
+	if got.conn != factoryConn {
 		t.Fatal("connection closed before reusable should not be returned to the pool")
 	}
 }
@@ -128,10 +142,10 @@ func TestPoolConnCloseWriteBeforeRequestClosesRawConnection(t *testing.T) {
 	if err := conn.CloseWrite(); err != nil {
 		t.Fatal(err)
 	}
-	if rawConn.writes != 0 {
-		t.Fatalf("CloseWrite before request should not send half-close record, got %d writes", rawConn.writes)
+	if rawConn.writes.Load() != 0 {
+		t.Fatalf("CloseWrite before request should not send half-close record, got %d writes", rawConn.writes.Load())
 	}
-	if !rawConn.closed {
+	if !rawConn.closed.Load() {
 		t.Fatal("CloseWrite before request should close the raw connection")
 	}
 
@@ -144,7 +158,7 @@ func TestPoolConnCloseWriteBeforeRequestClosesRawConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != factoryConn {
+	if got.conn != factoryConn {
 		t.Fatal("unstarted connection should not be returned to the pool")
 	}
 }
@@ -172,11 +186,11 @@ func TestPoolConnCloseWriteDoesNotReturnConnectionToPool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != factoryConn {
+	if got.conn != factoryConn {
 		t.Fatal("CloseWrite should not put the active connection back into the pool")
 	}
-	if rawConn.writes != 2 {
-		t.Fatalf("CloseWrite should send the request and one half-close record, got %d writes", rawConn.writes)
+	if rawConn.writes.Load() != 2 {
+		t.Fatalf("CloseWrite should send the request and one half-close record, got %d writes", rawConn.writes.Load())
 	}
 	if !pooledConn.reply {
 		t.Fatal("CloseWrite should not reset reply while the read side may still be active")
@@ -192,14 +206,14 @@ func TestPoolConnCloseWriteDoesNotReturnConnectionToPool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != pooledConn {
+	if got.conn != pooledConn {
 		t.Fatal("Close should return the connection to the pool after CloseWrite")
 	}
-	if rawConn.writes != 2 {
-		t.Fatalf("Close after CloseWrite should not send another half-close record, got %d writes", rawConn.writes)
+	if rawConn.writes.Load() != 2 {
+		t.Fatalf("Close after CloseWrite should not send another half-close record, got %d writes", rawConn.writes.Load())
 	}
-	if rawConn.reads != 1 {
-		t.Fatalf("Close should observe the peer half-close before pooling, got %d reads", rawConn.reads)
+	if rawConn.reads.Load() != 1 {
+		t.Fatalf("Close should observe the peer half-close before pooling, got %d reads", rawConn.reads.Load())
 	}
 	if pooledConn.reply {
 		t.Fatal("Close should reset reply before returning the connection to the pool")
@@ -223,14 +237,14 @@ func TestPoolConnCloseWithoutPeerHalfCloseClosesRawConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !rawConn.closed {
+	if !rawConn.closed.Load() {
 		t.Fatal("connection without peer half-close should close the raw connection")
 	}
 	got, err := pool.pool.Get()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != factoryConn {
+	if got.conn != factoryConn {
 		t.Fatal("connection without peer half-close should not be returned to the pool")
 	}
 }
@@ -248,15 +262,15 @@ func TestPoolConnReadZeroChunkReturnsEOF(t *testing.T) {
 }
 
 type recordingConn struct {
-	writes   int
-	reads    int
+	writes   atomic.Int32
+	reads    atomic.Int32
 	readData []byte
 	readErr  error
-	closed   bool
+	closed   atomic.Bool
 }
 
 func (c *recordingConn) Read(b []byte) (int, error) {
-	c.reads++
+	c.reads.Add(1)
 	if len(c.readData) > 0 {
 		n := copy(b, c.readData)
 		c.readData = c.readData[n:]
@@ -269,12 +283,12 @@ func (c *recordingConn) Read(b []byte) (int, error) {
 }
 
 func (c *recordingConn) Write(b []byte) (int, error) {
-	c.writes++
+	c.writes.Add(1)
 	return len(b), nil
 }
 
 func (c *recordingConn) Close() error {
-	c.closed = true
+	c.closed.Store(true)
 	return nil
 }
 

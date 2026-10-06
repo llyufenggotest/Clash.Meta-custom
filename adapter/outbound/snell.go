@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/structure"
@@ -16,6 +17,7 @@ import (
 	"github.com/metacubex/mihomo/component/ech/echparser"
 	tlsC "github.com/metacubex/mihomo/component/tls"
 	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/transport/jls"
 	"github.com/metacubex/mihomo/transport/restls"
 	newshadowtls "github.com/metacubex/mihomo/transport/shadowtls"
@@ -23,6 +25,8 @@ import (
 	obfs "github.com/metacubex/mihomo/transport/simple-obfs"
 	"github.com/metacubex/mihomo/transport/snell"
 	"github.com/metacubex/mihomo/transport/vmess"
+	"github.com/metacubex/tls"
+	utls "github.com/metacubex/utls"
 )
 
 type Snell struct {
@@ -42,6 +46,7 @@ type Snell struct {
 	identity              bool
 	version               int
 	reuse                 bool
+	warmCancel            context.CancelFunc
 }
 
 type SnellOption struct {
@@ -77,7 +82,22 @@ type SnellOption struct {
 }
 
 func (s *Snell) Close() error {
+	if s.warmCancel != nil {
+		s.warmCancel()
+	}
+	if s.pool != nil {
+		return s.pool.Close()
+	}
 	return s.Base.Close()
+}
+
+func (s *Snell) startWarm(count int) {
+	warmCtx, cancel := context.WithTimeout(context.Background(), snellECHTLSPreconnectTimeout)
+	s.warmCancel = cancel
+	go func() {
+		defer cancel()
+		s.pool.Warm(warmCtx, count)
+	}()
 }
 
 type streamOption struct {
@@ -115,6 +135,8 @@ type snellObfsOption struct {
 }
 
 const defaultSnellClientFingerprint = "chrome"
+const snellECHTLSSessionCacheCapacity = 32
+const snellECHTLSPreconnectTimeout = 10 * time.Second
 const (
 	snellECHTLSALPN         = "snell-ech/1"
 	snellECHTLSPreviousALPN = "oix-snell/1"
@@ -171,6 +193,17 @@ func resolveSnellClientFingerprint(obfsOption *snellObfsOption, option SnellOpti
 		return option.ClientFingerprint
 	}
 	return defaultSnellClientFingerprint
+}
+
+// snellECHTLSClientFingerprint keeps ECH-TLS on uTLS. With fingerprint none,
+// crypto/tls exposes the inner Snell ALPN in the outer ClientHello.
+func snellECHTLSClientFingerprint(obfsOption *snellObfsOption, option SnellOption) string {
+	fingerprint := resolveSnellClientFingerprint(obfsOption, option)
+	if strings.EqualFold(fingerprint, "none") {
+		log.Warnln("[Snell] %s ignores client-fingerprint none, using %s", snellECHTLSALPN, defaultSnellClientFingerprint)
+		return defaultSnellClientFingerprint
+	}
+	return fingerprint
 }
 
 func snellECHTLSConfig(obfsOption *snellObfsOption) (*ech.Config, error) {
@@ -359,20 +392,20 @@ func (s *Snell) writeHeaderContext(ctx context.Context, c net.Conn, metadata *C.
 // DialContext implements C.ProxyAdapter
 func (s *Snell) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.Conn, err error) {
 	if s.pool != nil {
-		for attempts := 0; attempts < 2; attempts++ {
-			c, getErr := s.pool.GetContext(ctx)
-			if getErr != nil {
-				return nil, getErr
-			}
-			if err = s.writeHeaderContext(ctx, c, metadata); err != nil {
-				_ = c.Close()
-				continue
-			}
-			if poolConn, ok := c.(*snell.PoolConn); ok {
-				poolConn.MarkReusable()
-			}
-			return NewConn(c, s), nil
+		c, getErr := s.pool.GetContext(ctx)
+		if getErr != nil {
+			return nil, getErr
 		}
+		if err = s.writeHeaderContext(ctx, c, metadata); err != nil {
+			_ = c.Close()
+			return nil, err
+		}
+		// The destination header is committed. A missing reply does not prove
+		// the server ignored it, so return read failures without replaying it.
+		if poolConn, ok := c.(*snell.PoolConn); ok {
+			poolConn.MarkReusable()
+		}
+		return NewConn(c, s), nil
 	}
 
 	c, err := s.dialSnellTransport(ctx)
@@ -404,7 +437,6 @@ func (s *Snell) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (
 
 	c, err = s.StreamConnContext(ctx, c, metadata)
 	if err != nil {
-		_ = c.Close()
 		return nil, err
 	}
 
@@ -681,15 +713,17 @@ func NewSnell(option SnellOption) (*Snell, error) {
 			nextProtos = append(nextProtos, snellECHTLSLegacyALPN)
 		}
 		s.echTLS = &vmess.TLSConfig{
-			Host:              obfsOption.Host,
-			SkipCertVerify:    obfsOption.SkipCertVerify,
-			NameCertVerify:    obfsOption.NameCertVerify,
-			ClientFingerprint: resolveSnellClientFingerprint(obfsOption, option),
-			FingerPrint:       obfsOption.Fingerprint,
-			Certificate:       obfsOption.Certificate,
-			PrivateKey:        obfsOption.PrivateKey,
-			NextProtos:        nextProtos,
-			ECH:               echConfig,
+			Host:                obfsOption.Host,
+			SkipCertVerify:      obfsOption.SkipCertVerify,
+			NameCertVerify:      obfsOption.NameCertVerify,
+			ClientFingerprint:   snellECHTLSClientFingerprint(obfsOption, option),
+			FingerPrint:         obfsOption.Fingerprint,
+			Certificate:         obfsOption.Certificate,
+			PrivateKey:          obfsOption.PrivateKey,
+			NextProtos:          nextProtos,
+			ECH:                 echConfig,
+			ClientSessionCache:  tls.NewLRUClientSessionCache(snellECHTLSSessionCacheCapacity),
+			UClientSessionCache: utls.NewLRUClientSessionCache(snellECHTLSSessionCacheCapacity),
 		}
 	}
 
@@ -721,13 +755,19 @@ func NewSnell(option SnellOption) (*Snell, error) {
 			// The oix identity transport keeps a ping connection reusable. A plain
 			// upstream Snell server closes it after pong, so only prewarm identity sessions.
 			if s.version == snell.Version4 && s.identity {
-				if err = stream.Warmup(); err != nil {
+				done := N.SetupContextForConn(ctx, stream)
+				err = stream.Warmup()
+				done(&err)
+				if err != nil {
 					_ = stream.Close()
 					return nil, err
 				}
 			}
 			return stream, nil
 		})
+		if obfsOption.Preconnect > 0 {
+			s.startWarm(obfsOption.Preconnect)
+		}
 	}
 	return s, nil
 }

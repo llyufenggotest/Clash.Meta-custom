@@ -2,6 +2,8 @@ package snell
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -19,6 +21,23 @@ func (writerConn) SetDeadline(time.Time) error      { return nil }
 func (writerConn) SetReadDeadline(time.Time) error  { return nil }
 func (writerConn) SetWriteDeadline(time.Time) error { return nil }
 func (writerConn) Read([]byte) (int, error)         { return 0, net.ErrClosed }
+
+func TestWriteUDPHeaderRejectsShortWrite(t *testing.T) {
+	if err := WriteUDPHeader(shortWriterConn{}, Version4); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("WriteUDPHeader() error = %v, want io.ErrShortWrite", err)
+	}
+}
+
+type shortWriterConn struct{}
+
+func (shortWriterConn) Write([]byte) (int, error)        { return 1, nil }
+func (shortWriterConn) Close() error                     { return nil }
+func (shortWriterConn) LocalAddr() net.Addr              { return nil }
+func (shortWriterConn) RemoteAddr() net.Addr             { return nil }
+func (shortWriterConn) SetDeadline(time.Time) error      { return nil }
+func (shortWriterConn) SetReadDeadline(time.Time) error  { return nil }
+func (shortWriterConn) SetWriteDeadline(time.Time) error { return nil }
+func (shortWriterConn) Read([]byte) (int, error)         { return 0, net.ErrClosed }
 
 func TestWriteHeaderRejectsInvalidDestinationBeforeWriting(t *testing.T) {
 	for _, test := range []struct {

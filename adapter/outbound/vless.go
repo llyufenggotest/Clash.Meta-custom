@@ -37,6 +37,26 @@ import (
 	"github.com/samber/lo"
 )
 
+const x365UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+func prepareX365XHTTPHeaders(headers map[string]string, x365 bool) map[string]string {
+	if !x365 {
+		return headers
+	}
+	prepared := make(map[string]string, len(headers)+1)
+	hasUserAgent := false
+	for key, value := range headers {
+		prepared[key] = value
+		if strings.EqualFold(key, "User-Agent") {
+			hasUserAgent = true
+		}
+	}
+	if !hasUserAgent {
+		prepared["User-Agent"] = x365UserAgent
+	}
+	return prepared
+}
+
 type Vless struct {
 	*Base
 	client *vless.Client
@@ -501,8 +521,7 @@ func NewVless(option VlessOption) (*Vless, error) {
 
 	// All private VLESS markers are parsed once by the transport package so
 	// mixed suffixes cannot activate two wire modes.
-	isX365 := false
-
+	isX365 := strings.HasSuffix(option.UUID, "#x365")
 	var addons *vless.Addons
 	if len(option.Flow) >= 16 {
 		option.Flow = option.Flow[:16]
@@ -687,7 +706,7 @@ func NewVless(option VlessOption) (*Vless, error) {
 			Host:                 requestHost,
 			Path:                 v.option.XHTTPOpts.Path,
 			Mode:                 v.option.XHTTPOpts.Mode,
-			Headers:              v.option.XHTTPOpts.Headers,
+			Headers:              prepareX365XHTTPHeaders(v.option.XHTTPOpts.Headers, isX365),
 			NoGRPCHeader:         v.option.XHTTPOpts.NoGRPCHeader,
 			XPaddingBytes:        v.option.XHTTPOpts.XPaddingBytes,
 			XPaddingObfsMode:     v.option.XHTTPOpts.XPaddingObfsMode,

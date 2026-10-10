@@ -169,8 +169,6 @@ github.com/metacubex/sing-quic v0.0.0-20260904234848-1c242664697a h1:qZzQwtWDrPU
 github.com/metacubex/sing-quic v0.0.0-20260904234848-1c242664697a/go.mod h1:6ayFGfzzBE85csgQkM3gf4neFq6s0losHlPRSxY+nuk=
 github.com/metacubex/sing-shadowsocks v0.2.13 h1:PKmInHy9+4nY3FLhmKcWdASUBo9WZ/KrSPWjNpGaUTQ=
 github.com/metacubex/sing-shadowsocks v0.2.13/go.mod h1:2e5EIaw0rxKrm1YTRmiMnDulwbGxH9hAFlrwQLQMQkU=
-github.com/metacubex/sing-tun v0.4.27 h1:dWCpFDlWelQrhH3y5KkMrJXEXYeJ0V2LROP8Cxv96MI=
-github.com/metacubex/sing-tun v0.4.27/go.mod h1:5nlmrOy+FG0yhiLm+O/pzmirZVrpLuDQZuA+qI9x5kg=
 github.com/metacubex/sing-vmess v0.2.5 h1:m9Zt5I27lB9fmLMZfism9sH2LcnAfShZfwSkf6/KJoE=
 github.com/metacubex/sing-vmess v0.2.5/go.mod h1:AwtlzUgf8COe9tRYAKqWZ+leDH7p5U98a0ZUpYehl8Q=
 github.com/metacubex/sing-wireguard v0.0.0-20260826105301-c3ae17d19f9e h1:KGKZt//rrELT/dEwgYcHCqNYEGr3a7uVutlZrzrZZWY=
@@ -342,3 +340,5 @@ gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 software.sslmate.com/src/go-pkcs12 v0.4.0 h1:H2g08FrTvSFKUj+D309j1DPfk5APnIdAQAB8aEykJ5k=
 software.sslmate.com/src/go-pkcs12 v0.4.0/go.mod h1:Qiz0EyvDRJjjxGyUQa2cCNZn/wMyzrRJ/qcDXOQazLI=
+github.com/metacubex/sing-tun v0.4.28-0.20261008092224-bfc905547122 h1:G9p63he/uJW+9kQMypGd7ApxNt/N97NX182bzNyKoag=
+github.com/metacubex/sing-tun v0.4.28-0.20261008092224-bfc905547122/go.mod h1:5nlmrOy+FG0yhiLm+O/pzmirZVrpLuDQZuA+qI9x5kg=

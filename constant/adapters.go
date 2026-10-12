@@ -247,8 +247,8 @@ func (at AdapterType) String() string {
 		return "EasyTier"
 	case GostRelay:
 		return "GostRelay"
-	case XHttp: // 👈 添加这 2 行
-		return "XHttp"
+	case XHttp:
+		return "Blackstone"
 	case Oppa:
 		return "Oppa"
 	case Relay:

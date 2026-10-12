@@ -57,11 +57,13 @@ type xhttpRealConfig struct {
 
 type XHttpOption struct {
 	BasicOption
-	Name     string `proxy:"name"`
-	Server   string `proxy:"server"`
-	Port     int    `proxy:"port"`
-	Password string `proxy:"password"`
-	NodeID   string `proxy:"node-id"`
+	Name       string `proxy:"name"`
+	Server     string `proxy:"server"`
+	Port       int    `proxy:"port"`
+	Password   string `proxy:"password"`
+	NodeID     string `proxy:"node-id"`
+	DeviceID   string `proxy:"device_id,omitempty" yaml:"device_id" mapstructure:"device_id"`
+	DeviceName string `proxy:"device_name,omitempty" yaml:"device_name" mapstructure:"device_name"`
 }
 
 type XHttp struct {
@@ -450,8 +452,17 @@ func xhttpAPITransport(dialer C.Dialer) *http.Transport {
 	return transport
 }
 
+var blackstoneAPIClient = func(dialer C.Dialer) *http.Client {
+	return &http.Client{Transport: xhttpAPITransport(dialer), Timeout: 15 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+}
+
 func (h *XHttp) fetchDynamicConfig(ctx context.Context, nodeID, token string) ([]xhttpRealConfig, error) {
 	url := fmt.Sprintf("https://%s/api/v3/proxy/config", xhttpAPIIP)
+	deviceContext := h.option != nil && h.option.DeviceID != "" && h.option.DeviceName != ""
+	if deviceContext {
+		url = "https://" + xhttpAPIHost + "/api/v3/proxy/config"
+	}
 
 	reqMap := map[string]interface{}{
 		"fastest_ping": map[string]interface{}{},
@@ -475,8 +486,16 @@ func (h *XHttp) fetchDynamicConfig(ctx context.Context, nodeID, token string) ([
 	req.Header.Set("x-platform", "android")
 	req.Header.Set("user-agent", "okhttp/4.9.2")
 	req.Header.Set("x-header", h.buildXHeader(token))
+	if deviceContext {
+		req.Header.Set("x-version", "540")
+		req.Header.Set("accept", "application/json, text/plain, */*")
+		req.Header.Set("accept-language", "zh_CN")
+	}
 
-	client := &http.Client{Transport: xhttpAPITransport(h.dialer)}
+	client := blackstoneAPIClient(h.dialer)
+	if !deviceContext {
+		client = &http.Client{Transport: xhttpAPITransport(h.dialer)}
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -653,6 +672,24 @@ func (h *XHttp) buildXHeader(token string) string {
 		"X-TIMESTAMP":    "1779367490",
 		"X-CHECK-MOBILE": `{"isRoot":true,"isEmulator":false,"bundleID":"com.heysocks.android"}`,
 		"X-OS-VERSION":   "30",
+	}
+	// Omitted pair is the isolated legacy subscription contract.
+	if h.option != nil && h.option.DeviceID != "" && h.option.DeviceName != "" {
+		headerMap = map[string]interface{}{
+			"X-IDENTIFIER":      h.option.DeviceID,
+			"X-DEVICE-NAME":     h.option.DeviceName,
+			"X-TOKEN":           token,
+			"X-TIMESTAMP":       strconv.FormatInt(time.Now().Unix(), 10),
+			"X-SOURCE":          `{"mvjarp":"gp","sracun":"gp"}`,
+			"X-CHECK-MOBILE":    `{"isRoot":true,"isEmulator":false,"bundleID":"com.heysocks.android"}`,
+			"X-BUNDLE-ID":       "",
+			"X-ABIS":            "arm64-v8a,armeabi-v7a,armeabi",
+			"X-INSTALLREFERRER": "unknown",
+			"X-OS-VERSION":      "30",
+			"X-ISP":             "",
+			"X-COUNTRY-CODE":    "CN",
+			"X-LOADED":          "false",
+		}
 	}
 	headerJson, _ := json.Marshal(headerMap)
 	return h.encryptRequestData(string(headerJson))

@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/metacubex/mihomo/adapter/outbound"
 	"github.com/metacubex/mihomo/common/structure"
@@ -239,7 +240,21 @@ func ParseProxy(mapping map[string]any, options ...ProxyOption) (C.Proxy, error)
 			break
 		}
 		proxy, err = outbound.NewEasyTier(*easyTierOption)
-	case "xhttp":
+	case "Blackstone", "xhttp":
+		for _, key := range []string{"device_id", "device_name"} {
+			value, present := mapping[key]
+			if present {
+				text, ok := value.(string)
+				if !ok || strings.TrimSpace(text) == "" {
+					return nil, fmt.Errorf("Blackstone %s must be a non-empty string", key)
+				}
+			}
+		}
+		_, hasID := mapping["device_id"]
+		_, hasName := mapping["device_name"]
+		if hasID != hasName || (proxyType == "Blackstone" && !hasID) {
+			return nil, fmt.Errorf("Blackstone requires both device_id and device_name")
+		}
 		xhttpOption := &outbound.XHttpOption{BasicOption: basicOption}
 		err = decoder.Decode(mapping, xhttpOption)
 		if err != nil {

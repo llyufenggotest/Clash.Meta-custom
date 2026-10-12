@@ -3,6 +3,8 @@ package adapter
 import (
 	"context"
 	"crypto/tls"
+	"errors"
+	"github.com/metacubex/mihomo/adapter/outbound"
 	C "github.com/metacubex/mihomo/constant"
 	"go.yaml.in/yaml/v3"
 	"io"
@@ -11,6 +13,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -41,6 +44,8 @@ func TestBlackstoneLiveSelectedYAML(t *testing.T) {
 	if err != nil || p == nil {
 		t.Fatal("selected subscription parser failed")
 	}
+	defer p.Close()
+	var wireRead, wireWrite atomic.Int64
 	t.Log("selected YAML parsed; device pair retained in memory")
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -55,7 +60,25 @@ func TestBlackstoneLiveSelectedYAML(t *testing.T) {
 		} else {
 			return nil, io.ErrUnexpectedEOF
 		}
-		return p.DialContext(ctx, &C.Metadata{Host: host, DstPort: n, Type: C.HTTP, NetWork: C.TCP})
+		c, err := p.DialContext(ctx, &C.Metadata{Host: host, DstPort: n, Type: C.HTTP, NetWork: C.TCP})
+		if err != nil {
+			return nil, err
+		}
+		// Unwrap only known core wrappers, then count below the Blackstone cipher.
+		var upstream any = c
+		for i := 0; i < 8; i++ {
+			if x, ok := upstream.(*outbound.XHttpConn); ok {
+				x.Conn = &blackstoneWireCounter{Conn: x.Conn, read: &wireRead, written: &wireWrite}
+				return c, nil
+			}
+			u, ok := upstream.(interface{ Upstream() any })
+			if !ok {
+				break
+			}
+			upstream = u.Upstream()
+		}
+		c.Close()
+		return nil, errors.New("live wire instrumentation requires Blackstone cipher connection")
 	}, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
 	defer tr.CloseIdleConnections()
 	client := &http.Client{Transport: tr, Timeout: 25 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -97,11 +120,14 @@ func TestBlackstoneLiveSelectedYAML(t *testing.T) {
 			if strings.Contains(err.Error(), "all dynamic nodes failed") {
 				t.Log("matched config TCP ping race failed")
 			}
-			t.Fatalf("BLOCKED actual Go adapter request %s (control/device/transport refused; sensitive error suppressed)", target.url)
+			t.Fatalf("actual Go adapter failed: %s", blackstoneSafeError(err))
 		}
 		n, err := io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
-		t.Logf("actual Go adapter %s status=%d received_bytes=%d", target.url, resp.StatusCode, n)
+		t.Logf("actual Go adapter %s status=%d received_bytes=%d wire_read=%d wire_written=%d", target.url, resp.StatusCode, n, wireRead.Load(), wireWrite.Load())
+		if wireRead.Load() <= 0 || wireWrite.Load() <= 0 {
+			t.Fatal("no encrypted data-plane traffic")
+		}
 		if err != nil || resp.StatusCode != target.status {
 			t.Fatal("unexpected data-plane result")
 		}

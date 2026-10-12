@@ -167,6 +167,9 @@ func (h *XHttp) pingRace(ctx context.Context, configs []xhttpRealConfig) (xhttpR
 }
 
 func (h *XHttp) lazyInit(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	h.initMu.Lock()
 	defer h.initMu.Unlock()
 
@@ -177,7 +180,7 @@ func (h *XHttp) lazyInit(ctx context.Context) error {
 		h.isInit = false
 	}
 
-	apiCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	apiCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
 	allConfigs, err := h.fetchDynamicConfig(apiCtx, h.option.NodeID, h.option.Password)
@@ -499,7 +502,7 @@ func (h *XHttp) fetchDynamicConfig(ctx context.Context, nodeID, token string) ([
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("api request failed: %v", err)
+		return nil, fmt.Errorf("api request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -518,7 +521,7 @@ func (h *XHttp) fetchDynamicConfig(ctx context.Context, nodeID, token string) ([
 	}
 	encryptedB64, ok := jsonResp["data"].(string)
 	if !ok || encryptedB64 == "" {
-		return nil, errors.New("api data field must be a non-empty string")
+		return nil, blackstoneAdmissionError(resp.StatusCode, jsonResp, "api data field must be a non-empty string")
 	}
 	return h.processApiData(encryptedB64)
 }
@@ -549,7 +552,9 @@ func (h *XHttp) processApiData(encryptedB64 string) ([]xhttpRealConfig, error) {
 		return nil, fmt.Errorf("decode api envelope: %w", err)
 	}
 	if layer1.Data == nil {
-		return nil, errors.New("decrypted data field is missing")
+		var admission map[string]any
+		_ = json.Unmarshal(rawB64, &admission)
+		return nil, blackstoneAdmissionError(http.StatusOK, admission, "decrypted data field is missing")
 	}
 	smartB64, ok := layer1.Data["smart"].(string)
 	if !ok || smartB64 == "" {

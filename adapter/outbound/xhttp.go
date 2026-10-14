@@ -72,6 +72,7 @@ type XHttp struct {
 	initMu     sync.Mutex
 	isInit     bool
 	initErr    error
+	initFlight *xhttpInitFlight
 	bestCfg    xhttpRealConfig
 	lastFetch  time.Time
 	ssOutbound C.ProxyAdapter
@@ -163,7 +164,12 @@ func (h *XHttp) pingRace(ctx context.Context, configs []xhttpRealConfig) (xhttpR
 			firstErr = res.err
 		}
 	}
-	return xhttpRealConfig{}, fmt.Errorf("all dynamic nodes failed tcp ping: %v", firstErr)
+	return xhttpRealConfig{}, fmt.Errorf("all dynamic nodes failed tcp ping: %w", firstErr)
+}
+
+type xhttpInitFlight struct {
+	done chan struct{}
+	err  error
 }
 
 func (h *XHttp) lazyInit(ctx context.Context) error {
@@ -171,22 +177,47 @@ func (h *XHttp) lazyInit(ctx context.Context) error {
 		return err
 	}
 	h.initMu.Lock()
-	defer h.initMu.Unlock()
-
-	if h.isInit {
-		if time.Since(h.lastFetch) < 1*time.Hour {
-			return h.initErr
-		}
-		h.isInit = false
+	if h.isInit && time.Since(h.lastFetch) < time.Hour {
+		h.initMu.Unlock()
+		return nil
 	}
+	if flight := h.initFlight; flight != nil {
+		h.initMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-flight.done:
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return flight.err
+		}
+	}
+	flight := &xhttpInitFlight{done: make(chan struct{})}
+	h.initFlight = flight
+	h.initMu.Unlock()
 
+	best, ss, err := h.initialize(ctx)
+	h.initMu.Lock()
+	if err == nil {
+		h.bestCfg, h.ssOutbound = best, ss
+		h.isInit, h.lastFetch = true, time.Now()
+	}
+	h.initErr, flight.err = err, err
+	h.initFlight = nil
+	close(flight.done)
+	h.initMu.Unlock()
+	return err
+}
+
+// Build state locally: failed or canceled refreshes must not publish partial config.
+func (h *XHttp) initialize(ctx context.Context) (xhttpRealConfig, C.ProxyAdapter, error) {
 	apiCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
 	allConfigs, err := h.fetchDynamicConfig(apiCtx, h.option.NodeID, h.option.Password)
 	if err != nil {
-		h.initErr = err
-		return err
+		return xhttpRealConfig{}, nil, err
 	}
 
 	var matchedConfigs []xhttpRealConfig
@@ -214,17 +245,15 @@ func (h *XHttp) lazyInit(ctx context.Context) error {
 	}
 
 	if len(matchedConfigs) == 0 {
-		h.initErr = fmt.Errorf("no target node matched for name: %s", h.option.Name)
-		return h.initErr
+		return xhttpRealConfig{}, nil, errors.New("no target node matched")
 	}
 
 	best, err := h.pingRace(apiCtx, matchedConfigs)
 	if err != nil {
-		h.initErr = err
-		return err
+		return xhttpRealConfig{}, nil, err
 	}
 
-	h.bestCfg = best
+	var ss C.ProxyAdapter
 	if best.Type == "ss" {
 		portInt, _ := strconv.Atoi(best.Port)
 		ssOpt := ShadowSocksOption{
@@ -235,16 +264,13 @@ func (h *XHttp) lazyInit(ctx context.Context) error {
 			Password:    best.Password + "#BLACKSTONE",
 			Cipher:      best.Cipher,
 		}
-		h.ssOutbound, h.initErr = NewShadowSocks(ssOpt)
-		if h.initErr != nil {
-			return h.initErr
+		ss, err = NewShadowSocks(ssOpt)
+		if err != nil {
+			return xhttpRealConfig{}, nil, err
 		}
 	}
 
-	h.isInit = true
-	h.initErr = nil
-	h.lastFetch = time.Now()
-	return nil
+	return best, ss, nil
 }
 
 func (h *XHttp) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, error) {
@@ -252,11 +278,14 @@ func (h *XHttp) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, 
 		return nil, err
 	}
 
-	if h.ssOutbound != nil {
-		return h.ssOutbound.DialContext(ctx, metadata)
+	h.initMu.Lock()
+	best, ss := h.bestCfg, h.ssOutbound
+	h.initMu.Unlock()
+	if ss != nil {
+		return ss.DialContext(ctx, metadata)
 	}
 
-	addr := net.JoinHostPort(h.bestCfg.Server, h.bestCfg.Port)
+	addr := net.JoinHostPort(best.Server, best.Port)
 	rawConn, err := h.dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
@@ -266,7 +295,7 @@ func (h *XHttp) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, 
 		tcpConn.SetNoDelay(true)
 	}
 
-	passParts := strings.Split(h.bestCfg.Password, ":")
+	passParts := strings.Split(best.Password, ":")
 	if len(passParts) != 2 {
 		rawConn.Close()
 		return nil, errors.New("invalid xhttp password format")
@@ -279,7 +308,7 @@ func (h *XHttp) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, 
 	ivLenOffset := 144 + hmacLen
 
 	clientHandshake := make([]byte, handshakeLen)
-	decodedTcp, _ := hex.DecodeString(h.bestCfg.TcpFake)
+	decodedTcp, _ := hex.DecodeString(best.TcpFake)
 
 	copyLen := len(decodedTcp)
 	if copyLen > 128 {
@@ -345,8 +374,11 @@ func (h *XHttp) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (
 	if err := h.lazyInit(ctx); err != nil {
 		return nil, err
 	}
-	if h.ssOutbound != nil {
-		return h.ssOutbound.ListenPacketContext(ctx, metadata)
+	h.initMu.Lock()
+	ss := h.ssOutbound
+	h.initMu.Unlock()
+	if ss != nil {
+		return ss.ListenPacketContext(ctx, metadata)
 	}
 	return nil, C.ErrNotSupport
 }
@@ -500,6 +532,8 @@ func (h *XHttp) fetchDynamicConfig(ctx context.Context, nodeID, token string) ([
 		client = &http.Client{Transport: xhttpAPITransport(h.dialer)}
 	}
 
+	// The client/transport is scoped to this fetch, not shared by later retries.
+	defer client.CloseIdleConnections()
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("api request failed: %w", err)
@@ -730,10 +764,11 @@ func (h *XHttp) decryptBlackstonePayload(rawData []byte) ([]byte, error) {
 	payload := rawData[headerSize:]
 	isKey := make([]bool, len(payload))
 	for _, off := range table {
+		if off.start > off.end || uint64(off.end) > uint64(len(payload)) {
+			return nil, errors.New("invalid blackstone chunk range")
+		}
 		for i := off.start; i < off.end; i++ {
-			if int(i) < len(isKey) {
-				isKey[i] = true
-			}
+			isKey[i] = true
 		}
 	}
 

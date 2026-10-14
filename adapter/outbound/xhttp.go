@@ -795,6 +795,12 @@ func (h *XHttp) fetchDynamicConfig(ctx context.Context, nodeID, token string) (c
 	if err != nil {
 		return nil, fmt.Errorf("create api request: %w", err)
 	}
+	// NewRequest supplies GetBody for bytes.Buffer, which lets HTTP/2 replay
+	// this POST after REFUSED_STREAM/GOAWAY even when its body was sent.
+	// Server-side idempotency is unproven: keep HTTP/2 and TLS verification,
+	// but do not make the private control payload rewindable. The transport
+	// may still replace an unusable connection before writing the request.
+	req.GetBody = nil
 	req.Host = xhttpAPIHost
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("x-version", "520")

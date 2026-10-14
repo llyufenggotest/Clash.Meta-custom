@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/metacubex/mihomo/common/arc"
@@ -46,8 +48,12 @@ type Resolver struct {
 	fallbackLazyQuery     bool
 	group                 singleflight.Group[*D.Msg]
 	cache                 dnsCache
-	policy                []dnsPolicy
-	defaultResolver       *Resolver
+	// cacheMu serializes explicit invalidation, epoch capture and cache commits.
+	// It is never held during an upstream exchange.
+	cacheMu         sync.Mutex
+	cacheEpoch      uint64
+	policy          []dnsPolicy
+	defaultResolver *Resolver
 }
 
 func (r *Resolver) LookupIPPrimaryIPv4(ctx context.Context, host string) (ips []netip.Addr, err error) {
@@ -153,20 +159,25 @@ func (r *Resolver) ExchangeContext(ctx context.Context, m *D.Msg) (msg *D.Msg, e
 	if len(m.Question) == 0 {
 		return nil, errors.New("should have one question at least")
 	}
+	q := m.Question[0]
+	// Capture the cache generation with the read. A deferred stale refresh or
+	// canceled caller must keep this generation even if ClearCache intervenes.
+	r.cacheMu.Lock()
+	epoch := r.cacheEpoch
+	msg, expireTime, hit := getMsgFromCache(r.cache, q)
+	r.cacheMu.Unlock()
 	continueFetch := false
 	defer func() {
 		if continueFetch || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), resolver.DefaultDNSTimeout)
 				defer cancel()
-				_, _ = r.exchangeWithoutCache(ctx, m) // ignore result, just for putMsgToCache
+				_, _ = r.exchangeWithoutCacheEpoch(ctx, m, epoch) // ignore result, just for putMsgToCache
 			}()
 		}
 	}()
 
-	q := m.Question[0]
 	domain := msgToDomain(m)
-	msg, expireTime, hit := getMsgFromCache(r.cache, q)
 	if hit {
 		log.Debugln("[DNS] cache hit %s --> %s, expire at %s", domain, msgToLogString(msg), expireTime.Format("2006-01-02 15:04:05"))
 		r.traceCacheHit(ctx, q, msg)
@@ -180,12 +191,22 @@ func (r *Resolver) ExchangeContext(ctx context.Context, m *D.Msg) (msg *D.Msg, e
 		}
 		return
 	}
-	return r.exchangeWithoutCache(ctx, m)
+	return r.exchangeWithoutCacheEpoch(ctx, m, epoch)
 }
 
 // ExchangeWithoutCache a batch of dns request, and it do NOT GET from cache
 func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.Msg, err error) {
+	r.cacheMu.Lock()
+	epoch := r.cacheEpoch
+	r.cacheMu.Unlock()
+	return r.exchangeWithoutCacheEpoch(ctx, m, epoch)
+}
+
+func (r *Resolver) exchangeWithoutCacheEpoch(ctx context.Context, m *D.Msg, epoch uint64) (msg *D.Msg, err error) {
 	q := m.Question[0]
+	// Old waiters may still receive their response, but new callers must not
+	// join pre-clear work, including background refresh/retry flights.
+	key := strconv.FormatUint(epoch, 10) + ":" + q.String()
 
 	retryNum := 0
 	retryMax := 3
@@ -205,7 +226,11 @@ func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.M
 			}
 
 			if cache {
-				putMsgToCache(r.cache, q, result)
+				r.cacheMu.Lock()
+				if epoch == r.cacheEpoch {
+					putMsgToCache(r.cache, q, result)
+				}
+				r.cacheMu.Unlock()
 			}
 		}()
 		defer func() { trace.finish(result, err) }()
@@ -224,7 +249,7 @@ func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.M
 		return
 	}
 
-	ch := r.group.DoChan(q.String(), fn)
+	ch := r.group.DoChan(key, fn)
 
 	var result singleflight.Result[*D.Msg]
 
@@ -240,7 +265,7 @@ func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.M
 				result := <-ch
 				ret, err, shared := result.Val, result.Err, result.Shared
 				if err != nil && !shared && ret.Opcode < retryMax { // retry
-					r.group.DoChan(q.String(), fn)
+					r.group.DoChan(key, fn)
 				}
 			}()
 			return nil, ctx.Err()
@@ -249,7 +274,7 @@ func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.M
 
 	ret, err, shared := result.Val, result.Err, result.Shared
 	if err != nil && !shared && ret.Opcode < retryMax { // retry
-		r.group.DoChan(q.String(), fn)
+		r.group.DoChan(key, fn)
 	}
 
 	if err == nil {
@@ -395,23 +420,18 @@ func (r *Resolver) Invalid() bool {
 }
 
 func (r *Resolver) ClearCache() {
-	if r != nil && r.cache != nil {
-		r.cache.Clear()
+	if r != nil {
+		r.cacheMu.Lock()
+		defer r.cacheMu.Unlock()
+		r.cacheEpoch++
+		if r.cache != nil {
+			r.cache.Clear()
+		}
 	}
 }
 
 func (r *Resolver) ResetConnection() {
-	if r != nil {
-		for _, c := range r.main {
-			c.ResetConnection()
-		}
-		for _, c := range r.fallback {
-			c.ResetConnection()
-		}
-		if dr := r.defaultResolver; dr != nil {
-			dr.ResetConnection()
-		}
-	}
+	newConnectionResetter().resetResolver(r)
 }
 
 type NameServer struct {
@@ -514,9 +534,10 @@ func (rs Resolvers) ClearCache() {
 }
 
 func (rs Resolvers) ResetConnection() {
-	rs.Resolver.ResetConnection()
-	rs.ProxyResolver.ResetConnection()
-	rs.DirectResolver.ResetConnection()
+	s := newConnectionResetter()
+	s.resetResolver(rs.Resolver)
+	s.resetResolver(rs.ProxyResolver)
+	s.resetResolver(rs.DirectResolver)
 }
 
 func NewResolverFromClient(client dnsClient) *Resolver {

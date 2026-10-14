@@ -2,6 +2,7 @@ package cachefile_test
 
 import (
 	"context"
+	"github.com/metacubex/bbolt"
 	"path/filepath"
 	"testing"
 
@@ -17,7 +18,12 @@ func TestOwnedMetadataPersistsAndRejectsRevokedEpoch(t *testing.T) {
 	old := C.Path.HomeDir()
 	C.SetHomeDir(dir)
 	defer C.SetHomeDir(old)
-	cache := &cachefile.CacheFile{}
+	db, err := bbolt.Open(filepath.Join(dir, "cache.db"), 0600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cache := &cachefile.CacheFile{DB: db}
 	var f *resource.Fetcher[string]
 	f = resource.NewOwnedFetcher("metadata", 0, resource.NewFileVehicle(filepath.Join(dir, "raw")), nil,
 		func(_ *resource.Owner, b []byte) (string, error) { return string(b), nil },
@@ -30,7 +36,7 @@ func TestOwnedMetadataPersistsAndRejectsRevokedEpoch(t *testing.T) {
 			if err := cache.SetSubscriptionInfoOwned(ctx, "provider", "upload=1; download=2"); err != nil {
 				t.Fatal(err)
 			}
-			fresh := &cachefile.CacheFile{}
+			fresh := &cachefile.CacheFile{DB: db}
 			if value := fresh.GetETagWithHash("url"); value.ETag != expected.ETag || !value.Hash.Equal(expected.Hash) {
 				t.Fatalf("fresh etag=%v", value)
 			}

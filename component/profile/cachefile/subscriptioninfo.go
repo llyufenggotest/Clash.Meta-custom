@@ -3,6 +3,7 @@ package cachefile
 import (
 	"context"
 	"github.com/metacubex/mihomo/log"
+	"os"
 
 	"github.com/metacubex/bbolt"
 )
@@ -12,6 +13,8 @@ func (c *CacheFile) SetSubscriptionInfo(name string, userInfo string) {
 		return
 	}
 
+	c.metadataMu.Lock()
+	defer c.metadataMu.Unlock()
 	err := c.DB.Batch(func(t *bbolt.Tx) error {
 		bucket, err := t.CreateBucketIfNotExists(bucketSubscriptionInfo)
 		if err != nil {
@@ -24,12 +27,21 @@ func (c *CacheFile) SetSubscriptionInfo(name string, userInfo string) {
 		log.Warnln("[CacheFile] write cache to %s failed: %s", c.DB.Path(), err.Error())
 		return
 	}
+	// A successful legacy DB write supersedes the prior owned overlay.
+	if err := os.Remove(c.ownedMetadataPath("subscription", name)); err != nil && !os.IsNotExist(err) {
+		log.Warnln("[CacheFile] provider metadata invalidation failed: %s", err)
+	}
 }
 func (c *CacheFile) SetSubscriptionInfoOwned(ctx context.Context, name, userInfo string) error {
-	return writeOwnedMetadata(ctx, "subscription", name, []byte(userInfo))
+	return c.writeOwnedMetadata(ctx, "subscription", name, []byte(userInfo))
 }
 func (c *CacheFile) GetSubscriptionInfo(name string) (userInfo string) {
-	if data, err := readOwnedMetadata("subscription", name); err == nil {
+	if c.DB == nil {
+		return
+	}
+	c.metadataMu.Lock()
+	defer c.metadataMu.Unlock()
+	if data, err := c.readOwnedMetadata("subscription", name); err == nil {
 		return string(data)
 	}
 

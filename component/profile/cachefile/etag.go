@@ -2,10 +2,10 @@ package cachefile
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/metacubex/mihomo/common/utils"
-	P "github.com/metacubex/mihomo/constant/provider"
 	"github.com/metacubex/mihomo/log"
 
 	"github.com/metacubex/bbolt"
@@ -28,6 +28,8 @@ func (c *CacheFile) SetETagWithHash(url string, etagWithHash EtagWithHash) {
 		return // maybe panic is better
 	}
 
+	c.metadataMu.Lock()
+	defer c.metadataMu.Unlock()
 	err = c.DB.Batch(func(t *bbolt.Tx) error {
 		bucket, err := t.CreateBucketIfNotExists(bucketETag)
 		if err != nil {
@@ -40,20 +42,28 @@ func (c *CacheFile) SetETagWithHash(url string, etagWithHash EtagWithHash) {
 		log.Warnln("[CacheFile] write cache to %s failed: %s", c.DB.Path(), err.Error())
 		return
 	}
+	// A successful legacy DB write supersedes the prior owned overlay.
+	if err := os.Remove(c.ownedMetadataPath("etag", url)); err != nil && !os.IsNotExist(err) {
+		log.Warnln("[CacheFile] provider metadata invalidation failed: %s", err)
+	}
 }
 func (c *CacheFile) SetETagWithHashOwned(ctx context.Context, url string, value EtagWithHash) error {
-	if P.PublicationOwnerFromContext(ctx) == nil {
-		c.SetETagWithHash(url, value)
-		return nil
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	data, err := msgpack.Marshal(value)
 	if err != nil {
 		return err
 	}
-	return writeOwnedMetadata(ctx, "etag", url, data)
+	return c.writeOwnedMetadata(ctx, "etag", url, data)
 }
 func (c *CacheFile) GetETagWithHash(key string) (etagWithHash EtagWithHash) {
-	if data, err := readOwnedMetadata("etag", key); err == nil && msgpack.Unmarshal(data, &etagWithHash) == nil {
+	if c.DB == nil {
+		return
+	}
+	c.metadataMu.Lock()
+	defer c.metadataMu.Unlock()
+	if data, err := c.readOwnedMetadata("etag", key); err == nil && msgpack.Unmarshal(data, &etagWithHash) == nil {
 		return
 	}
 

@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 
-	C "github.com/metacubex/mihomo/constant"
 	P "github.com/metacubex/mihomo/constant/provider"
 )
 
@@ -15,21 +14,34 @@ import (
 // lock: bbolt may wait for an unrelated writer and fsync. Instead stage its
 // individual entry outside the owner and admit only a same-directory rename.
 // Legacy DB entries remain a fallback; this does not replace the shared DB.
-func ownedMetadataPath(kind, key string) string {
-	return filepath.Join(C.Path.Cache()+".providers", kind+fmt.Sprintf("-%x", sha256.Sum256([]byte(key))))
+func (c *CacheFile) ownedMetadataPath(kind, key string) string {
+	return filepath.Join(c.DB.Path()+".providers", kind+fmt.Sprintf("-%x", sha256.Sum256([]byte(key))))
 }
-func readOwnedMetadata(kind, key string) ([]byte, error) {
-	return os.ReadFile(ownedMetadataPath(kind, key))
+func (c *CacheFile) readOwnedMetadata(kind, key string) ([]byte, error) {
+	return os.ReadFile(c.ownedMetadataPath(kind, key))
 }
-func writeOwnedMetadata(ctx context.Context, kind, key string, data []byte) error {
+func (c *CacheFile) writeOwnedMetadata(ctx context.Context, kind, key string, data []byte) error {
+	if c.DB == nil || c.DB.Path() == "" {
+		return ctx.Err()
+	}
 	owner := P.PublicationOwnerFromContext(ctx)
-	prepared, err := P.PrepareFileWrite(ctx, ownedMetadataPath(kind, key), data)
+	prepared, err := P.PrepareFileWrite(ctx, c.ownedMetadataPath(kind, key), data)
 	if err != nil {
 		return err
 	}
 	defer prepared.Abort()
-	if owner != nil {
-		return owner.CommitPrepared(prepared.Publish)
+	c.metadataMu.Lock()
+	defer c.metadataMu.Unlock()
+	final := func() error {
+		// Check the request child context at the actual serialized rename,
+		// not before waiting for another metadata writer or the owner.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return prepared.Publish()
 	}
-	return prepared.Publish()
+	if owner != nil {
+		return owner.CommitPrepared(final)
+	}
+	return final()
 }

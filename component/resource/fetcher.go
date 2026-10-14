@@ -252,11 +252,23 @@ func (f *Fetcher[V]) loadBufAdmitted(buf []byte, hash utils.HashType, updateFile
 		if err = f.owner.admit(); err != nil {
 			return lo.Empty[V](), false, err
 		}
-		prepared, err = f.vehicle.PrepareWrite(f.ctx, buf)
-		if err != nil {
-			return lo.Empty[V](), false, err
+		if staged, ok := f.vehicle.(P.PreparedVehicle); ok {
+			prepared, err = staged.PrepareWrite(f.ctx, buf)
+			if err != nil {
+				return lo.Empty[V](), false, err
+			}
+			defer prepared.Abort()
+		} else {
+			// Legacy Write is external, uncancellable code: admit before calling,
+			// never hold the owner while it runs. Close prevents new admissions,
+			// but cannot stop an admitted Write or roll back its disk effects.
+			if err = f.owner.admit(); err != nil {
+				return lo.Empty[V](), false, err
+			}
+			if err = f.vehicle.Write(buf); err != nil {
+				return lo.Empty[V](), false, err
+			}
 		}
-		defer prepared.Abort()
 	}
 	f.owner.mu.Lock()
 	if f.owner.closed {

@@ -7,13 +7,30 @@ jobs:
   fetcher-review:
     runs-on: macos-15
     timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: mihomo
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          path: mihomo
+      # Checkout paths must be inside GITHUB_WORKSPACE; nest core checkout so
+      # this immutable dependency is exactly ../sing-shadowsocks2 to go.mod.
+      - uses: actions/checkout@v4
+        with:
+          repository: llyufenggotest/sing-shadowsocks2-meta
+          ref: 0e35d2749fdc58d18dd7d612482adbfbd362c8f3
+          path: sing-shadowsocks2
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: mihomo/go.mod
+          cache-dependency-path: mihomo/go.sum
+      - name: Exact independent final-review RED then GREEN
+        run: |
+          python3 memory/review-fix/verify_final_fetcher.py red
+          python3 memory/review-fix/verify_final_fetcher.py green
       - name: Immutable baseline must reproduce real RED
         run: python3 memory/review-fix/verify_fetcher.py baseline
       - name: Normal, low-memory and stress behavior
@@ -29,4 +46,4 @@ jobs:
         if: always()
         with:
           name: fetcher-review-evidence
-          path: memory/review-fix/*.log
+          path: mihomo/memory/review-fix/*.log

@@ -58,8 +58,11 @@ def green():
     packages = ["./component/resource", "./adapter/provider", "./rules/provider", "./tunnel", "./common/utils", "./component/profile/cachefile"]
     run("normal-green", ["go", "test", *packages, "-count=1", "-v"])
     run("lowmem-green", ["go", "test", "-tags", "with_low_memory", *packages, "-count=1", "-v"])
-    run("stress-green", ["go", "test", "./component/resource", "./adapter/provider", "./rules/provider", "-run", "TestReview|Test.*FetcherCloseRevokes|TestOwnedProvider|TestSidecarRejectsRevoked", "-count=10", "-v"])
-    run("lowmem-stress-green", ["go", "test", "-tags", "with_low_memory", "./component/resource", "./adapter/provider", "./rules/provider", "-run", "TestReview|Test.*FetcherCloseRevokes|TestOwnedProvider|TestSidecarRejectsRevoked", "-count=10", "-v"])
+    # HTTP ownership fixtures close the cache singleton: repeat in fresh Go
+    # test processes, not -count=10 inside one process with a closed receiver.
+    for iteration in range(10):
+        run(f"stress-green-{iteration + 1}", ["go", "test", "./component/resource", "./adapter/provider", "./rules/provider", "-run", "TestReview|Test.*FetcherCloseRevokes|TestOwnedProvider|TestSidecarRejectsRevoked", "-count=1", "-v"])
+        run(f"lowmem-stress-green-{iteration + 1}", ["go", "test", "-tags", "with_low_memory", "./component/resource", "./adapter/provider", "./rules/provider", "-run", "TestReview|Test.*FetcherCloseRevokes|TestOwnedProvider|TestSidecarRejectsRevoked", "-count=1", "-v"])
     run("vet-green", ["go", "vet", *packages])
 
 

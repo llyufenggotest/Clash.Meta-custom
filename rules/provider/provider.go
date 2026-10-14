@@ -235,8 +235,8 @@ func NewRuleSetProvider(name string, behavior P.RuleBehavior, format P.RuleForma
 		providers, release := tunnel.AcquireRuleProviders()
 		defer release()
 		if providers[rp.Name()] == wrapper {
-			emit := tunnel.RuleUpdateCallback().PrepareEmit(P.RuleUpdate{Name: rp.Name(), Strategy: loaded.strategy})
-			_ = owner.Commit(emit)
+			emit := tunnel.RuleUpdateCallback().PrepareEmitGuarded(P.RuleUpdate{Name: rp.Name(), Strategy: loaded.strategy}, owner.Commit)
+			emit()
 		}
 	}
 

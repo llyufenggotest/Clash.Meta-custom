@@ -256,7 +256,13 @@ func NewProxySetProvider(name string, interval time.Duration, payload []map[stri
 				if owner := P.PublicationOwnerFromContext(ctx); owner != nil {
 					_ = cachefile.Cache().SetSubscriptionInfoOwned(ctx, name, subscriptionInfo)
 					pd.mutex.Lock()
-					_ = owner.CommitPrepared(func() error { pd.subscriptionInfo = info; return nil })
+					_ = owner.CommitPrepared(func() error {
+						if err := ctx.Err(); err != nil {
+							return err
+						}
+						pd.subscriptionInfo = info
+						return nil
+					})
 					pd.mutex.Unlock()
 				}
 			}

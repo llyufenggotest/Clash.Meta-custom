@@ -34,7 +34,8 @@ var (
 
 // CacheFile store and update the cache file
 type CacheFile struct {
-	DB *bbolt.DB
+	DB         *bbolt.DB
+	metadataMu sync.Mutex // provider sidefile publication; always before owner guard
 }
 
 func (c *CacheFile) SetSelected(group, selected string) {

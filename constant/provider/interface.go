@@ -37,13 +37,17 @@ func (v VehicleType) String() string {
 type Vehicle interface {
 	Read(ctx context.Context, oldHash utils.HashType) (buf []byte, hash utils.HashType, err error)
 	Write(buf []byte) error
-	// PrepareWrite may block, but must not mutate the final path. Fetcher owns
-	// the returned staging file and admits only its final atomic rename.
-	PrepareWrite(ctx context.Context, buf []byte) (*PreparedWrite, error)
 	Path() string
 	Url() string
 	Proxy() string
 	Type() VehicleType
+}
+
+// PreparedVehicle is optional; existing Vehicle implementations remain usable.
+// PrepareWrite must not mutate the final path. Fetcher owns the staging file
+// and serializes only its final rename with Close.
+type PreparedVehicle interface {
+	PrepareWrite(ctx context.Context, buf []byte) (*PreparedWrite, error)
 }
 
 // Provider Type

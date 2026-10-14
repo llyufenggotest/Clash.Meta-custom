@@ -28,6 +28,7 @@ type Fetcher[V any] struct {
 	name         string
 	vehicle      P.Vehicle
 	bundleFile   BundleFile
+	metadataMu   sync.RWMutex // independent: provider JSON may hold readyMu
 	updatedAt    time.Time
 	hash         utils.HashType
 	parser       Parser[V]
@@ -56,7 +57,29 @@ func (f *Fetcher[V]) VehicleType() P.VehicleType {
 }
 
 func (f *Fetcher[V]) UpdatedAt() time.Time {
+	f.metadataMu.RLock()
+	defer f.metadataMu.RUnlock()
 	return f.updatedAt
+}
+
+func (f *Fetcher[V]) metadataSnapshot() (utils.HashType, time.Time) {
+	f.metadataMu.RLock()
+	defer f.metadataMu.RUnlock()
+	return f.hash, f.updatedAt
+}
+
+func (f *Fetcher[V]) setInitialUpdatedAt(value time.Time) {
+	f.lifecycleMu.Lock()
+	defer f.lifecycleMu.Unlock()
+	if !f.closed {
+		f.setUpdatedAt(value)
+	}
+}
+
+func (f *Fetcher[V]) setUpdatedAt(value time.Time) {
+	f.metadataMu.Lock()
+	f.updatedAt = value
+	f.metadataMu.Unlock()
 }
 
 // InitialLocal admits only prepared disk content. It deliberately does not fall
@@ -88,7 +111,7 @@ func (f *Fetcher[V]) Initial() (V, error) {
 		buf, err := os.ReadFile(f.vehicle.Path())
 		modTime := stat.ModTime()
 		contents, _, err := f.loadBuf(buf, utils.MakeHash(buf), false)
-		f.updatedAt = modTime // reset updatedAt to file's modTime
+		f.setInitialUpdatedAt(modTime) // reset updatedAt to file's modTime
 
 		if err == nil {
 			err = f.startPullLoop(time.Since(modTime) > f.interval)
@@ -110,7 +133,7 @@ func (f *Fetcher[V]) Initial() (V, error) {
 				modTime = stat.ModTime()
 			}
 			contents, _, err := f.loadBuf(buf, utils.MakeHash(buf), true)
-			f.updatedAt = modTime // reset updatedAt to file's modTime
+			f.setInitialUpdatedAt(modTime) // reset updatedAt to file's modTime
 
 			if err == nil {
 				log.Infoln("[Provider] %s extract successful from bundle file", f.Name())
@@ -143,7 +166,8 @@ func (f *Fetcher[V]) Initial() (V, error) {
 }
 
 func (f *Fetcher[V]) Update() (V, bool, error) {
-	buf, hash, err := f.vehicle.Read(f.ctx, f.hash)
+	currentHash, _ := f.metadataSnapshot()
+	buf, hash, err := f.vehicle.Read(f.ctx, currentHash)
 	if err != nil {
 		f.backoff.AddAttempt() // add a failed attempt to backoff
 		return lo.Empty[V](), false, err
@@ -165,12 +189,13 @@ func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (
 		f.lifecycleMu.Unlock()
 		return lo.Empty[V](), false, context.Canceled
 	}
-	if f.hash.Equal(hash) {
+	currentHash, _ := f.metadataSnapshot()
+	if currentHash.Equal(hash) {
 		defer f.lifecycleMu.Unlock()
 		if updateFile {
 			_ = os.Chtimes(f.vehicle.Path(), now, now)
 		}
-		f.updatedAt = now
+		f.setUpdatedAt(now)
 		f.backoff.Reset() // no error, reset backoff
 		return lo.Empty[V](), true, nil
 	}
@@ -197,8 +222,10 @@ func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (
 			return lo.Empty[V](), false, err
 		}
 	}
+	f.metadataMu.Lock()
 	f.updatedAt = now
 	f.hash = hash
+	f.metadataMu.Unlock()
 
 	if f.onUpdate != nil {
 		f.onUpdate(contents)
@@ -222,7 +249,8 @@ func (f *Fetcher[V]) Close() error {
 }
 
 func (f *Fetcher[V]) pullLoop(forceUpdate bool) {
-	initialInterval := f.interval - time.Since(f.updatedAt)
+	_, updatedAt := f.metadataSnapshot()
+	initialInterval := f.interval - time.Since(updatedAt)
 	if initialInterval > f.interval {
 		initialInterval = f.interval
 	}

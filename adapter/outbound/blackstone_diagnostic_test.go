@@ -74,6 +74,7 @@ func blackstoneTestUnderlyingText(err error) string {
 
 func TestBlackstoneDiagnosticRealBodyReset(t *testing.T) {
 	var hits atomic.Int32
+	bodyRead := make(chan struct{})
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
 		_, _ = io.Copy(io.Discard, r.Body)
@@ -85,6 +86,13 @@ func TestBlackstoneDiagnosticRealBodyReset(t *testing.T) {
 		}
 		_, _ = bw.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 4096\r\n\r\nx")
 		_ = bw.Flush()
+		// Synchronize receipt of the TLS record before RST; otherwise Windows
+		// may discard unread headers and correctly classify a response-stage reset.
+		select {
+		case <-bodyRead:
+		case <-time.After(2 * time.Second):
+			t.Error("client never observed TLS response record")
+		}
 		if tc, ok := conn.(*tls.Conn); ok {
 			if tcp, ok := tc.NetConn().(*net.TCPConn); ok {
 				_ = tcp.SetLinger(0)
@@ -100,7 +108,7 @@ func TestBlackstoneDiagnosticRealBodyReset(t *testing.T) {
 	blackstoneLocalTLSClient(t, server, true)
 	h, _ := NewXHttp(XHttpOption{DeviceID: "fixture-device", DeviceName: "fixture-name"})
 	var wrote atomic.Bool
-	ctx := httptrace.WithClientTrace(context.Background(), &httptrace.ClientTrace{WroteRequest: func(i httptrace.WroteRequestInfo) {
+	ctx := httptrace.WithClientTrace(context.Background(), &httptrace.ClientTrace{GotFirstResponseByte: func() { close(bodyRead) }, WroteRequest: func(i httptrace.WroteRequestInfo) {
 		if i.Err == nil {
 			wrote.Store(true)
 		}

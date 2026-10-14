@@ -172,9 +172,30 @@ func (h *XHttp) pingRace(ctx context.Context, configs []xhttpRealConfig) (xhttpR
 	return xhttpRealConfig{}, fmt.Errorf("all dynamic nodes failed tcp ping: %w", firstErr)
 }
 
+const xhttpInitTimeout = 15 * time.Second
+
+// Each flight owns one bounded worker; callers (including the creator) only
+// wait. The adapter owns identity; the creator supplies routing/context values.
+// initMu protects membership and publication; done publishes err to waiters.
 type xhttpInitFlight struct {
-	done chan struct{}
-	err  error
+	done    chan struct{}
+	err     error
+	ctx     context.Context
+	cancel  context.CancelFunc
+	waiters map[*xhttpInitWaiter]context.Context
+}
+
+type xhttpInitWaiter struct{ marker byte } // Nonzero size: distinct membership pointers.
+
+// Check actual contexts, not only decrements: cancellation can occur before a
+// caller is scheduled to leave, including in the response Body.Close callback.
+func (f *xhttpInitFlight) hasLiveWaiter() bool {
+	for _, ctx := range f.waiters {
+		if ctx.Err() == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *XHttp) lazyInit(ctx context.Context) error {
@@ -182,38 +203,89 @@ func (h *XHttp) lazyInit(ctx context.Context) error {
 		return err
 	}
 	h.initMu.Lock()
+	if err := ctx.Err(); err != nil {
+		h.initMu.Unlock()
+		return err
+	}
 	if h.isInit && time.Since(h.lastFetch) < time.Hour {
 		h.initMu.Unlock()
 		return nil
 	}
-	if flight := h.initFlight; flight != nil {
-		h.initMu.Unlock()
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-flight.done:
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			return flight.err
+	flight := h.initFlight
+	if flight != nil && !flight.hasLiveWaiter() {
+		// Detach an abandoned attempt before allowing an independent retry.
+		// Its worker can never publish over the replacement flight's token.
+		flight.cancel()
+		h.initFlight = nil
+		flight = nil
+	}
+	start := flight == nil
+	if start {
+		// Detach creator cancellation AND deadline: either would poison a
+		// longer-lived waiter. Keep values (not a bare Background) and enforce
+		// the existing 15s policy across HTTP, selection and final publication.
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), xhttpInitTimeout)
+		flight = &xhttpInitFlight{done: make(chan struct{}), ctx: fetchCtx, cancel: cancel,
+			waiters: make(map[*xhttpInitWaiter]context.Context)}
+		h.initFlight = flight
+	}
+	waiter := &xhttpInitWaiter{}
+	flight.waiters[waiter] = ctx
+	h.initMu.Unlock()
+	if start {
+		go h.runInitFlight(flight)
+	}
+	defer h.leaveInitFlight(flight, waiter)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-flight.done:
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return flight.err
+	}
+}
+
+func (h *XHttp) leaveInitFlight(flight *xhttpInitFlight, waiter *xhttpInitWaiter) {
+	h.initMu.Lock()
+	defer h.initMu.Unlock()
+	delete(flight.waiters, waiter)
+	if h.initFlight == flight && !flight.hasLiveWaiter() {
+		flight.cancel()
+		h.initFlight = nil
+	}
+}
+
+func (h *XHttp) runInitFlight(flight *xhttpInitFlight) {
+	defer flight.cancel()
+	h.initMu.Lock()
+	if !flight.hasLiveWaiter() {
+		flight.cancel()
+	}
+	h.initMu.Unlock()
+	var best xhttpRealConfig
+	var ss C.ProxyAdapter
+	err := flight.ctx.Err()
+	if err == nil {
+		best, ss, err = h.initialize(flight.ctx)
+	}
+	h.initMu.Lock()
+	if err == nil {
+		switch {
+		case flight.ctx.Err() != nil:
+			err = blackstoneStageError("node-selection", flight.ctx.Err())
+		case h.initFlight != flight || !flight.hasLiveWaiter():
+			err = blackstoneStageError("node-selection", context.Canceled)
 		}
 	}
-	flight := &xhttpInitFlight{done: make(chan struct{})}
-	h.initFlight = flight
-	h.initMu.Unlock()
-
-	best, ss, err := h.initialize(ctx)
-	h.initMu.Lock()
-	if err == nil && ctx.Err() != nil {
-		err = blackstoneStageError("node-selection", ctx.Err())
+	if h.initFlight == flight {
+		if err == nil {
+			h.bestCfg, h.ssOutbound = best, ss
+			h.isInit, h.lastFetch = true, time.Now()
+		}
+		h.initErr = err
 	}
-	if err == nil {
-		h.bestCfg, h.ssOutbound = best, ss
-		h.isInit, h.lastFetch = true, time.Now()
-	}
-	h.initErr, flight.err = err, err
-	h.initFlight = nil
-	close(flight.done)
 	h.initMu.Unlock()
 	if err != nil {
 		if ss != nil {
@@ -221,7 +293,14 @@ func (h *XHttp) lazyInit(ctx context.Context) error {
 		}
 		blackstoneReportFailure(err)
 	}
-	return err
+	flight.cancel()
+	h.initMu.Lock()
+	if h.initFlight == flight {
+		h.initFlight = nil
+	}
+	flight.err = err
+	close(flight.done) // Completion includes timer/transport/discarded-state cleanup.
+	h.initMu.Unlock()
 }
 
 // Build state locally: failed or canceled refreshes must not publish partial config.

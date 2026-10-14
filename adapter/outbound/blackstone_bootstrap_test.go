@@ -127,10 +127,16 @@ func TestBlackstoneFailedThenSuccessfulFetch(t *testing.T) {
 
 func TestBlackstoneFetchDeadline(t *testing.T) {
 	h, _ := NewXHttp(XHttpOption{DeviceID: "synthetic", DeviceName: "synthetic"})
-	fixtureBlackstoneClient(t, func(r *http.Request) (*http.Response, error) { <-r.Context().Done(); return nil, r.Context().Err() })
+	flightCaptured := make(chan *xhttpInitFlight, 1)
+	fixtureBlackstoneClient(t, func(r *http.Request) (*http.Response, error) {
+		flightCaptured <- blackstoneCurrentFlight(h)
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	if err := h.lazyInit(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("deadline cause lost")
 	}
+	blackstoneFlightFinished(t, <-flightCaptured)
 }

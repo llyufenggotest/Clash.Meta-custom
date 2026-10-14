@@ -69,6 +69,7 @@ func TestBlackstoneInflightCancellation(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- h.lazyInit(ctx) }()
 	<-started
+	flight := blackstoneCurrentFlight(h)
 	cancel()
 	select {
 	case e := <-done:
@@ -78,6 +79,7 @@ func TestBlackstoneInflightCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("inflight control fetch ignored cancellation")
 	}
+	blackstoneFlightFinished(t, flight)
 }
 
 func TestBlackstoneCallerCancellation(t *testing.T) {

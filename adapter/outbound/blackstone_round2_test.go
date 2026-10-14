@@ -11,9 +11,9 @@ import (
 	"time"
 )
 
-// A leader's canceled fetch is shared, not automatically replayed with waiter
-// contexts. That is deliberate: no N retries from N still-live waiters.
-func TestBlackstoneLeaderDeadlineSharedWithoutWaiterRetry(t *testing.T) {
+// All callers cancel: one shared attempt, no automatic replay. BS-1 survival
+// with still-live callers is independently gated in blackstone_flight_test.go.
+func TestBlackstoneAllWaitersCancelWithoutReplay(t *testing.T) {
 	h, _ := NewXHttp(XHttpOption{DeviceID: "synthetic", DeviceName: "synthetic"})
 	started := make(chan struct{})
 	var calls atomic.Int32
@@ -34,18 +34,20 @@ func TestBlackstoneLeaderDeadlineSharedWithoutWaiterRetry(t *testing.T) {
 	joined := make(chan struct{}, 16)
 	for i := 0; i < 16; i++ {
 		go func() {
-			done <- h.lazyInit(blackstoneObservedWaitContext{Context: context.Background(), joined: joined})
+			done <- h.lazyInit(blackstoneObservedWaitContext{Context: leaderCtx, joined: joined})
 		}()
 	}
 	for i := 0; i < 16; i++ {
 		<-joined
 	}
+	flight := blackstoneCurrentFlight(h)
 	cancel()
 	for i := 0; i < 17; i++ {
 		if err := <-done; !errors.Is(err, context.Canceled) {
-			t.Fatal("shared leader cancellation cause lost")
+			t.Fatal("caller cancellation cause lost")
 		}
 	}
+	blackstoneFlightFinished(t, flight)
 	if calls.Load() != 1 {
 		t.Fatal("surviving waiters replayed the canceled POST")
 	}
@@ -70,6 +72,7 @@ func TestBlackstoneRefresh304AndCancellationPreserveOldCache(t *testing.T) {
 	envelope := fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: old, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
 	var calls atomic.Int32
 	body := &blackstoneCloseBody{Reader: strings.NewReader(`{"code":304,"message":"fixture-secret"}`)}
+	refreshFlight := make(chan *xhttpInitFlight, 1)
 	fixtureBlackstoneClient(t, func(r *http.Request) (*http.Response, error) {
 		switch calls.Add(1) {
 		case 1:
@@ -77,6 +80,7 @@ func TestBlackstoneRefresh304AndCancellationPreserveOldCache(t *testing.T) {
 		case 2:
 			return &http.Response{StatusCode: http.StatusNotModified, Body: body, Header: make(http.Header)}, nil
 		default:
+			refreshFlight <- blackstoneCurrentFlight(h)
 			<-r.Context().Done()
 			return nil, r.Context().Err()
 		}
@@ -98,6 +102,7 @@ func TestBlackstoneRefresh304AndCancellationPreserveOldCache(t *testing.T) {
 	if err := h.lazyInit(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("refresh deadline lost")
 	}
+	blackstoneFlightFinished(t, <-refreshFlight)
 	if h.bestCfg != original || !h.lastFetch.Equal(oldFetch) || h.initFlight != nil {
 		t.Fatal("failed refresh published partial state")
 	}
@@ -135,10 +140,13 @@ func TestBlackstoneCanceledAfterResponseDoesNotPublishCache(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	body := &blackstoneCancelOnCloseBody{Reader: strings.NewReader(`{"data":"` + envelope + `"}`), cancel: cancel}
+	flightCaptured := make(chan *xhttpInitFlight, 1)
 	fixtureBlackstoneClient(t, func(*http.Request) (*http.Response, error) {
+		flightCaptured <- blackstoneCurrentFlight(h)
 		return &http.Response{StatusCode: 200, Body: body, Header: make(http.Header)}, nil
 	})
 	err := h.lazyInit(ctx)
+	blackstoneFlightFinished(t, <-flightCaptured)
 	if !errors.Is(err, context.Canceled) || h.isInit || h.initFlight != nil {
 		t.Fatal("caller canceled after response but new cache published")
 	}

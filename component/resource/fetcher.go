@@ -35,7 +35,12 @@ type Fetcher[V any] struct {
 	onUpdate     func(V)
 	watcher      *fswatch.Watcher
 	loadBufMutex sync.Mutex
-	backoff      slowdown.Backoff
+	// Serialize publication and background-resource admission with terminal Close.
+	// Do not hold this lock across parser or vehicle.Read: neither is cancellable.
+	lifecycleMu sync.Mutex
+	closed      bool
+	pullStarted bool
+	backoff     slowdown.Backoff
 }
 
 func (f *Fetcher[V]) Name() string {
@@ -57,6 +62,9 @@ func (f *Fetcher[V]) UpdatedAt() time.Time {
 // InitialLocal admits only prepared disk content. It deliberately does not fall
 // back to network/bundle after a parse failure, preserving the actionable cause.
 func (f *Fetcher[V]) InitialLocal() (V, error) {
+	if err := f.ctx.Err(); err != nil {
+		return lo.Empty[V](), err
+	}
 	buf, err := os.ReadFile(f.vehicle.Path())
 	if err != nil {
 		return lo.Empty[V](), fmt.Errorf("prepared rules unavailable; prepare in app: %w", err)
@@ -72,6 +80,9 @@ func (f *Fetcher[V]) InitialLocal() (V, error) {
 }
 
 func (f *Fetcher[V]) Initial() (V, error) {
+	if err := f.ctx.Err(); err != nil {
+		return lo.Empty[V](), err
+	}
 	if stat, fErr := os.Stat(f.vehicle.Path()); fErr == nil {
 		// local file exists, use it first
 		buf, err := os.ReadFile(f.vehicle.Path())
@@ -149,7 +160,13 @@ func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (
 	defer f.loadBufMutex.Unlock()
 
 	now := time.Now()
+	f.lifecycleMu.Lock()
+	if f.closed {
+		f.lifecycleMu.Unlock()
+		return lo.Empty[V](), false, context.Canceled
+	}
 	if f.hash.Equal(hash) {
+		defer f.lifecycleMu.Unlock()
 		if updateFile {
 			_ = os.Chtimes(f.vehicle.Path(), now, now)
 		}
@@ -157,6 +174,7 @@ func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (
 		f.backoff.Reset() // no error, reset backoff
 		return lo.Empty[V](), true, nil
 	}
+	f.lifecycleMu.Unlock()
 
 	if buf == nil { // f.hash has been changed between f.vehicle.Read but should not happen (cause by concurrent)
 		return lo.Empty[V](), true, nil
@@ -166,6 +184,11 @@ func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (
 	if err != nil {
 		f.backoff.AddAttempt() // add a failed attempt to backoff
 		return lo.Empty[V](), false, err
+	}
+	f.lifecycleMu.Lock()
+	defer f.lifecycleMu.Unlock()
+	if f.closed {
+		return lo.Empty[V](), false, context.Canceled
 	}
 	f.backoff.Reset() // no error, reset backoff
 
@@ -185,9 +208,15 @@ func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (
 }
 
 func (f *Fetcher[V]) Close() error {
+	// Cancel immediately; serialize only with commits, not a pending read/parser.
 	f.ctxCancel()
-	if f.watcher != nil {
-		_ = f.watcher.Close()
+	f.lifecycleMu.Lock()
+	f.closed = true
+	watcher := f.watcher
+	f.watcher = nil
+	f.lifecycleMu.Unlock()
+	if watcher != nil {
+		_ = watcher.Close()
 	}
 	return nil
 }
@@ -228,6 +257,14 @@ func (f *Fetcher[V]) pullLoop(forceUpdate bool) {
 }
 
 func (f *Fetcher[V]) startPullLoop(forceUpdate bool) (err error) {
+	f.lifecycleMu.Lock()
+	defer f.lifecycleMu.Unlock()
+	if f.closed {
+		return context.Canceled
+	}
+	if f.pullStarted {
+		return nil
+	}
 	// pull contents automatically
 	if f.vehicle.Type() == P.File {
 		f.watcher, err = fswatch.NewWatcher(fswatch.Options{
@@ -239,11 +276,14 @@ func (f *Fetcher[V]) startPullLoop(forceUpdate bool) (err error) {
 		}
 		err = f.watcher.Start()
 		if err != nil {
+			_ = f.watcher.Close()
+			f.watcher = nil
 			return err
 		}
 	} else if f.interval > 0 {
 		go f.pullLoop(forceUpdate)
 	}
+	f.pullStarted = true
 	return
 }
 

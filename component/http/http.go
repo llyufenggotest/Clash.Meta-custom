@@ -87,7 +87,27 @@ func HttpRequest(ctx context.Context, url, method string, header map[string][]st
 	}
 
 	client := http.Client{Transport: transport}
-	return client.Do(req)
+	resp, err := client.Do(req)
+	if err != nil {
+		transport.CloseIdleConnections()
+		return resp, err
+	}
+	// This transport belongs to one request, not a shared client. Body.Close
+	// retires its idle HTTP/1 and HTTP/2 connections instead of leaving their
+	// buffers and goroutines live until IdleConnTimeout (or a subsequent GC).
+	resp.Body = &transportBody{ReadCloser: resp.Body, transport: transport}
+	return resp, nil
+}
+
+type transportBody struct {
+	io.ReadCloser
+	transport *http.Transport
+}
+
+func (b *transportBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.transport.CloseIdleConnections()
+	return err
 }
 
 type Option func(opt *option)

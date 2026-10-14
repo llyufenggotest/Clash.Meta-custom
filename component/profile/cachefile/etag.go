@@ -1,9 +1,11 @@
 package cachefile
 
 import (
+	"context"
 	"time"
 
 	"github.com/metacubex/mihomo/common/utils"
+	P "github.com/metacubex/mihomo/constant/provider"
 	"github.com/metacubex/mihomo/log"
 
 	"github.com/metacubex/bbolt"
@@ -39,7 +41,22 @@ func (c *CacheFile) SetETagWithHash(url string, etagWithHash EtagWithHash) {
 		return
 	}
 }
+func (c *CacheFile) SetETagWithHashOwned(ctx context.Context, url string, value EtagWithHash) error {
+	if P.PublicationOwnerFromContext(ctx) == nil {
+		c.SetETagWithHash(url, value)
+		return nil
+	}
+	data, err := msgpack.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return writeOwnedMetadata(ctx, "etag", url, data)
+}
 func (c *CacheFile) GetETagWithHash(key string) (etagWithHash EtagWithHash) {
+	if data, err := readOwnedMetadata("etag", key); err == nil && msgpack.Unmarshal(data, &etagWithHash) == nil {
+		return
+	}
+
 	if c.DB == nil {
 		return
 	}

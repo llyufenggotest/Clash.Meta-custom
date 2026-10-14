@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -124,7 +125,14 @@ type ProxySetProvider struct {
 type proxySetProvider struct {
 	baseProvider
 	*resource.Fetcher[[]C.Proxy]
+	healthStarted    bool
 	subscriptionInfo *SubscriptionInfo
+}
+
+func (pp *proxySetProvider) subscriptionSnapshot() *SubscriptionInfo {
+	pp.mutex.RLock()
+	defer pp.mutex.RUnlock()
+	return pp.subscriptionInfo
 }
 
 func (pp *proxySetProvider) MarshalJSON() ([]byte, error) {
@@ -136,7 +144,7 @@ func (pp *proxySetProvider) MarshalJSON() ([]byte, error) {
 		TestUrl:          pp.healthCheck.url,
 		ExpectedStatus:   pp.healthCheck.expectedStatus.String(),
 		UpdatedAt:        pp.UpdatedAt(),
-		SubscriptionInfo: pp.subscriptionInfo,
+		SubscriptionInfo: pp.subscriptionSnapshot(),
 	})
 }
 
@@ -150,15 +158,31 @@ func (pp *proxySetProvider) Update() error {
 }
 
 func (pp *proxySetProvider) Initial() error {
-	if err := pp.baseProvider.Initial(); err != nil {
+	pp.mutex.Lock()
+	err := pp.Fetcher.CommitState(func() {
+		if !pp.healthStarted {
+			pp.healthStarted = true
+			if pp.healthCheck.auto() {
+				go pp.healthCheck.process()
+			}
+		}
+	})
+	pp.mutex.Unlock()
+	if err != nil {
 		return err
 	}
-	_, err := pp.Fetcher.Initial()
+	_, err = pp.Fetcher.Initial()
 	if err != nil {
 		return err
 	}
 	if subscriptionInfo := cachefile.Cache().GetSubscriptionInfo(pp.Name()); subscriptionInfo != "" {
-		pp.subscriptionInfo = NewSubscriptionInfo(subscriptionInfo)
+		info := NewSubscriptionInfo(subscriptionInfo)
+		pp.mutex.Lock()
+		err = pp.Fetcher.CommitState(func() { pp.subscriptionInfo = info })
+		pp.mutex.Unlock()
+		if err != nil {
+			return err
+		}
 	}
 	pp.closeAllConnections()
 	return nil
@@ -205,13 +229,36 @@ func NewProxySetProvider(name string, interval time.Duration, payload []map[stri
 		hc.setProxies(proxies)
 	}
 
-	fetcher := resource.NewFetcher[[]C.Proxy](name, interval, vehicle, nil, parser, pd.setProxies)
+	fetcher := resource.NewOwnedFetcher[[]C.Proxy](name, interval, vehicle, nil,
+		func(owner *resource.Owner, b []byte) ([]C.Proxy, error) {
+			if err := owner.Context().Err(); err != nil {
+				return nil, err
+			}
+			return parser(b)
+		}, func(owner *resource.Owner, proxies []C.Proxy) {
+			// Acquire provider locks before the owner; Close never joins these.
+			pd.mutex.Lock()
+			defer pd.mutex.Unlock()
+			_ = owner.Commit(func() {
+				pd.proxies = proxies
+				pd.version++
+				pd.healthCheck.setProxies(proxies)
+				if pd.healthCheck.auto() {
+					go pd.healthCheck.check()
+				}
+			})
+		})
 	pd.Fetcher = fetcher
 	if httpVehicle, ok := vehicle.(*resource.HTTPVehicle); ok {
-		httpVehicle.SetInRead(func(resp *http.Response) {
+		httpVehicle.SetInReadOwned(func(ctx context.Context, resp *http.Response) {
 			if subscriptionInfo := resp.Header.Get("subscription-userinfo"); subscriptionInfo != "" {
-				cachefile.Cache().SetSubscriptionInfo(name, subscriptionInfo)
-				pd.subscriptionInfo = NewSubscriptionInfo(subscriptionInfo)
+				info := NewSubscriptionInfo(subscriptionInfo)
+				if owner := P.PublicationOwnerFromContext(ctx); owner != nil {
+					_ = cachefile.Cache().SetSubscriptionInfoOwned(ctx, name, subscriptionInfo)
+					pd.mutex.Lock()
+					_ = owner.CommitPrepared(func() error { pd.subscriptionInfo = info; return nil })
+					pd.mutex.Unlock()
+				}
 			}
 		})
 	}

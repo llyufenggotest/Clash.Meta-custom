@@ -1,0 +1,249 @@
+$ go test -tags with_low_memory ./component/resource ./adapter/provider ./rules/provider -run TestReview|Test.*FetcherCloseRevokes|TestOwnedProvider|TestSidecarRejectsRevoked -count=10 -v
+=== RUN   TestReviewReadAdmissionDoesNotSpillWorkers
+--- PASS: TestReviewReadAdmissionDoesNotSpillWorkers (0.00s)
+=== RUN   TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile
+--- PASS: TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile (0.02s)
+=== RUN   TestReviewOwnedCallbackCancellationAndNoWorkerSpill
+--- PASS: TestReviewOwnedCallbackCancellationAndNoWorkerSpill (2.97s)
+=== RUN   TestReviewCallbackCloseReentry
+--- PASS: TestReviewCallbackCloseReentry (0.09s)
+=== RUN   TestReviewSlowCallbackCloseBound
+--- PASS: TestReviewSlowCallbackCloseBound (0.06s)
+=== RUN   TestReviewClosedUpdateStartsNoRead
+--- PASS: TestReviewClosedUpdateStartsNoRead (0.00s)
+=== RUN   TestReviewReadAdmissionDoesNotSpillWorkers
+--- PASS: TestReviewReadAdmissionDoesNotSpillWorkers (0.00s)
+=== RUN   TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile
+--- PASS: TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile (0.05s)
+=== RUN   TestReviewOwnedCallbackCancellationAndNoWorkerSpill
+--- PASS: TestReviewOwnedCallbackCancellationAndNoWorkerSpill (2.10s)
+=== RUN   TestReviewCallbackCloseReentry
+--- PASS: TestReviewCallbackCloseReentry (0.05s)
+=== RUN   TestReviewSlowCallbackCloseBound
+--- PASS: TestReviewSlowCallbackCloseBound (0.03s)
+=== RUN   TestReviewClosedUpdateStartsNoRead
+--- PASS: TestReviewClosedUpdateStartsNoRead (0.00s)
+=== RUN   TestReviewReadAdmissionDoesNotSpillWorkers
+--- PASS: TestReviewReadAdmissionDoesNotSpillWorkers (0.00s)
+=== RUN   TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile
+--- PASS: TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile (0.04s)
+=== RUN   TestReviewOwnedCallbackCancellationAndNoWorkerSpill
+--- PASS: TestReviewOwnedCallbackCancellationAndNoWorkerSpill (1.86s)
+=== RUN   TestReviewCallbackCloseReentry
+--- PASS: TestReviewCallbackCloseReentry (0.04s)
+=== RUN   TestReviewSlowCallbackCloseBound
+--- PASS: TestReviewSlowCallbackCloseBound (0.04s)
+=== RUN   TestReviewClosedUpdateStartsNoRead
+--- PASS: TestReviewClosedUpdateStartsNoRead (0.00s)
+=== RUN   TestReviewReadAdmissionDoesNotSpillWorkers
+--- PASS: TestReviewReadAdmissionDoesNotSpillWorkers (0.00s)
+=== RUN   TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile
+--- PASS: TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile (0.05s)
+=== RUN   TestReviewOwnedCallbackCancellationAndNoWorkerSpill
+--- PASS: TestReviewOwnedCallbackCancellationAndNoWorkerSpill (1.92s)
+=== RUN   TestReviewCallbackCloseReentry
+--- PASS: TestReviewCallbackCloseReentry (0.04s)
+=== RUN   TestReviewSlowCallbackCloseBound
+--- PASS: TestReviewSlowCallbackCloseBound (0.05s)
+=== RUN   TestReviewClosedUpdateStartsNoRead
+--- PASS: TestReviewClosedUpdateStartsNoRead (0.01s)
+=== RUN   TestReviewReadAdmissionDoesNotSpillWorkers
+--- PASS: TestReviewReadAdmissionDoesNotSpillWorkers (0.00s)
+=== RUN   TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile
+--- PASS: TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile (0.08s)
+=== RUN   TestReviewOwnedCallbackCancellationAndNoWorkerSpill
+--- PASS: TestReviewOwnedCallbackCancellationAndNoWorkerSpill (1.89s)
+=== RUN   TestReviewCallbackCloseReentry
+--- PASS: TestReviewCallbackCloseReentry (0.04s)
+=== RUN   TestReviewSlowCallbackCloseBound
+--- PASS: TestReviewSlowCallbackCloseBound (0.04s)
+=== RUN   TestReviewClosedUpdateStartsNoRead
+--- PASS: TestReviewClosedUpdateStartsNoRead (0.00s)
+=== RUN   TestReviewReadAdmissionDoesNotSpillWorkers
+--- PASS: TestReviewReadAdmissionDoesNotSpillWorkers (0.00s)
+=== RUN   TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile
+--- PASS: TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile (0.03s)
+=== RUN   TestReviewOwnedCallbackCancellationAndNoWorkerSpill
+--- PASS: TestReviewOwnedCallbackCancellationAndNoWorkerSpill (1.89s)
+=== RUN   TestReviewCallbackCloseReentry
+--- PASS: TestReviewCallbackCloseReentry (0.05s)
+=== RUN   TestReviewSlowCallbackCloseBound
+--- PASS: TestReviewSlowCallbackCloseBound (0.06s)
+=== RUN   TestReviewClosedUpdateStartsNoRead
+--- PASS: TestReviewClosedUpdateStartsNoRead (0.00s)
+=== RUN   TestReviewReadAdmissionDoesNotSpillWorkers
+--- PASS: TestReviewReadAdmissionDoesNotSpillWorkers (0.00s)
+=== RUN   TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile
+--- PASS: TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile (0.04s)
+=== RUN   TestReviewOwnedCallbackCancellationAndNoWorkerSpill
+--- PASS: TestReviewOwnedCallbackCancellationAndNoWorkerSpill (1.86s)
+=== RUN   TestReviewCallbackCloseReentry
+--- PASS: TestReviewCallbackCloseReentry (0.04s)
+=== RUN   TestReviewSlowCallbackCloseBound
+--- PASS: TestReviewSlowCallbackCloseBound (0.04s)
+=== RUN   TestReviewClosedUpdateStartsNoRead
+--- PASS: TestReviewClosedUpdateStartsNoRead (0.00s)
+=== RUN   TestReviewReadAdmissionDoesNotSpillWorkers
+--- PASS: TestReviewReadAdmissionDoesNotSpillWorkers (0.00s)
+=== RUN   TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile
+--- PASS: TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile (0.04s)
+=== RUN   TestReviewOwnedCallbackCancellationAndNoWorkerSpill
+--- PASS: TestReviewOwnedCallbackCancellationAndNoWorkerSpill (1.90s)
+=== RUN   TestReviewCallbackCloseReentry
+--- PASS: TestReviewCallbackCloseReentry (0.05s)
+=== RUN   TestReviewSlowCallbackCloseBound
+--- PASS: TestReviewSlowCallbackCloseBound (0.05s)
+=== RUN   TestReviewClosedUpdateStartsNoRead
+--- PASS: TestReviewClosedUpdateStartsNoRead (0.00s)
+=== RUN   TestReviewReadAdmissionDoesNotSpillWorkers
+--- PASS: TestReviewReadAdmissionDoesNotSpillWorkers (0.00s)
+=== RUN   TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile
+--- PASS: TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile (0.04s)
+=== RUN   TestReviewOwnedCallbackCancellationAndNoWorkerSpill
+--- PASS: TestReviewOwnedCallbackCancellationAndNoWorkerSpill (1.90s)
+=== RUN   TestReviewCallbackCloseReentry
+--- PASS: TestReviewCallbackCloseReentry (0.04s)
+=== RUN   TestReviewSlowCallbackCloseBound
+--- PASS: TestReviewSlowCallbackCloseBound (0.04s)
+=== RUN   TestReviewClosedUpdateStartsNoRead
+--- PASS: TestReviewClosedUpdateStartsNoRead (0.00s)
+=== RUN   TestReviewReadAdmissionDoesNotSpillWorkers
+--- PASS: TestReviewReadAdmissionDoesNotSpillWorkers (0.00s)
+=== RUN   TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile
+--- PASS: TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile (0.04s)
+=== RUN   TestReviewOwnedCallbackCancellationAndNoWorkerSpill
+--- PASS: TestReviewOwnedCallbackCancellationAndNoWorkerSpill (1.88s)
+=== RUN   TestReviewCallbackCloseReentry
+--- PASS: TestReviewCallbackCloseReentry (0.04s)
+=== RUN   TestReviewSlowCallbackCloseBound
+--- PASS: TestReviewSlowCallbackCloseBound (0.04s)
+=== RUN   TestReviewClosedUpdateStartsNoRead
+--- PASS: TestReviewClosedUpdateStartsNoRead (0.00s)
+PASS
+ok  	github.com/metacubex/mihomo/component/resource	21.623s
+=== RUN   TestOwnedProviderMetadataRejectsCanceledPreparation
+--- PASS: TestOwnedProviderMetadataRejectsCanceledPreparation (0.10s)
+=== RUN   TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag
+--- PASS: TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag (0.16s)
+=== RUN   TestProxyFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestProxyFetcherCloseRevokesBlockedProductionPublication (0.06s)
+=== RUN   TestOwnedProviderMetadataRejectsCanceledPreparation
+--- PASS: TestOwnedProviderMetadataRejectsCanceledPreparation (0.06s)
+=== RUN   TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag
+--- PASS: TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag (0.08s)
+=== RUN   TestProxyFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestProxyFetcherCloseRevokesBlockedProductionPublication (0.08s)
+=== RUN   TestOwnedProviderMetadataRejectsCanceledPreparation
+--- PASS: TestOwnedProviderMetadataRejectsCanceledPreparation (0.07s)
+=== RUN   TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag
+--- PASS: TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag (0.06s)
+=== RUN   TestProxyFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestProxyFetcherCloseRevokesBlockedProductionPublication (0.06s)
+=== RUN   TestOwnedProviderMetadataRejectsCanceledPreparation
+--- PASS: TestOwnedProviderMetadataRejectsCanceledPreparation (0.06s)
+=== RUN   TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag
+--- PASS: TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag (0.06s)
+=== RUN   TestProxyFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestProxyFetcherCloseRevokesBlockedProductionPublication (0.06s)
+=== RUN   TestOwnedProviderMetadataRejectsCanceledPreparation
+--- PASS: TestOwnedProviderMetadataRejectsCanceledPreparation (0.06s)
+=== RUN   TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag
+--- PASS: TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag (0.08s)
+=== RUN   TestProxyFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestProxyFetcherCloseRevokesBlockedProductionPublication (0.08s)
+=== RUN   TestOwnedProviderMetadataRejectsCanceledPreparation
+--- PASS: TestOwnedProviderMetadataRejectsCanceledPreparation (0.05s)
+=== RUN   TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag
+--- PASS: TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag (0.05s)
+=== RUN   TestProxyFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestProxyFetcherCloseRevokesBlockedProductionPublication (0.06s)
+=== RUN   TestOwnedProviderMetadataRejectsCanceledPreparation
+--- PASS: TestOwnedProviderMetadataRejectsCanceledPreparation (0.06s)
+=== RUN   TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag
+--- PASS: TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag (0.09s)
+=== RUN   TestProxyFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestProxyFetcherCloseRevokesBlockedProductionPublication (0.06s)
+=== RUN   TestOwnedProviderMetadataRejectsCanceledPreparation
+--- PASS: TestOwnedProviderMetadataRejectsCanceledPreparation (0.05s)
+=== RUN   TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag
+--- PASS: TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag (0.07s)
+=== RUN   TestProxyFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestProxyFetcherCloseRevokesBlockedProductionPublication (0.07s)
+=== RUN   TestOwnedProviderMetadataRejectsCanceledPreparation
+--- PASS: TestOwnedProviderMetadataRejectsCanceledPreparation (0.06s)
+=== RUN   TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag
+--- PASS: TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag (0.07s)
+=== RUN   TestProxyFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestProxyFetcherCloseRevokesBlockedProductionPublication (0.07s)
+=== RUN   TestOwnedProviderMetadataRejectsCanceledPreparation
+--- PASS: TestOwnedProviderMetadataRejectsCanceledPreparation (0.04s)
+=== RUN   TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag
+--- PASS: TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag (0.08s)
+=== RUN   TestProxyFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestProxyFetcherCloseRevokesBlockedProductionPublication (0.07s)
+PASS
+ok  	github.com/metacubex/mihomo/adapter/provider	2.131s
+=== RUN   TestRuleFetcherCloseRevokesLateSnapshotEmission
+--- PASS: TestRuleFetcherCloseRevokesLateSnapshotEmission (0.13s)
+=== RUN   TestRuleFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestRuleFetcherCloseRevokesBlockedProductionPublication (0.06s)
+=== RUN   TestSidecarRejectsRevokedParserOwner
+--- PASS: TestSidecarRejectsRevokedParserOwner (0.07s)
+=== RUN   TestRuleFetcherCloseRevokesLateSnapshotEmission
+--- PASS: TestRuleFetcherCloseRevokesLateSnapshotEmission (0.16s)
+=== RUN   TestRuleFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestRuleFetcherCloseRevokesBlockedProductionPublication (0.11s)
+=== RUN   TestSidecarRejectsRevokedParserOwner
+--- PASS: TestSidecarRejectsRevokedParserOwner (0.07s)
+=== RUN   TestRuleFetcherCloseRevokesLateSnapshotEmission
+--- PASS: TestRuleFetcherCloseRevokesLateSnapshotEmission (0.12s)
+=== RUN   TestRuleFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestRuleFetcherCloseRevokesBlockedProductionPublication (0.10s)
+=== RUN   TestSidecarRejectsRevokedParserOwner
+--- PASS: TestSidecarRejectsRevokedParserOwner (0.07s)
+=== RUN   TestRuleFetcherCloseRevokesLateSnapshotEmission
+--- PASS: TestRuleFetcherCloseRevokesLateSnapshotEmission (0.15s)
+=== RUN   TestRuleFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestRuleFetcherCloseRevokesBlockedProductionPublication (0.07s)
+=== RUN   TestSidecarRejectsRevokedParserOwner
+--- PASS: TestSidecarRejectsRevokedParserOwner (0.06s)
+=== RUN   TestRuleFetcherCloseRevokesLateSnapshotEmission
+--- PASS: TestRuleFetcherCloseRevokesLateSnapshotEmission (0.11s)
+=== RUN   TestRuleFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestRuleFetcherCloseRevokesBlockedProductionPublication (0.09s)
+=== RUN   TestSidecarRejectsRevokedParserOwner
+--- PASS: TestSidecarRejectsRevokedParserOwner (0.07s)
+=== RUN   TestRuleFetcherCloseRevokesLateSnapshotEmission
+--- PASS: TestRuleFetcherCloseRevokesLateSnapshotEmission (0.09s)
+=== RUN   TestRuleFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestRuleFetcherCloseRevokesBlockedProductionPublication (0.07s)
+=== RUN   TestSidecarRejectsRevokedParserOwner
+--- PASS: TestSidecarRejectsRevokedParserOwner (0.06s)
+=== RUN   TestRuleFetcherCloseRevokesLateSnapshotEmission
+--- PASS: TestRuleFetcherCloseRevokesLateSnapshotEmission (0.12s)
+=== RUN   TestRuleFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestRuleFetcherCloseRevokesBlockedProductionPublication (0.10s)
+=== RUN   TestSidecarRejectsRevokedParserOwner
+--- PASS: TestSidecarRejectsRevokedParserOwner (0.07s)
+=== RUN   TestRuleFetcherCloseRevokesLateSnapshotEmission
+--- PASS: TestRuleFetcherCloseRevokesLateSnapshotEmission (0.12s)
+=== RUN   TestRuleFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestRuleFetcherCloseRevokesBlockedProductionPublication (0.09s)
+=== RUN   TestSidecarRejectsRevokedParserOwner
+--- PASS: TestSidecarRejectsRevokedParserOwner (0.06s)
+=== RUN   TestRuleFetcherCloseRevokesLateSnapshotEmission
+--- PASS: TestRuleFetcherCloseRevokesLateSnapshotEmission (0.08s)
+=== RUN   TestRuleFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestRuleFetcherCloseRevokesBlockedProductionPublication (0.06s)
+=== RUN   TestSidecarRejectsRevokedParserOwner
+--- PASS: TestSidecarRejectsRevokedParserOwner (0.06s)
+=== RUN   TestRuleFetcherCloseRevokesLateSnapshotEmission
+--- PASS: TestRuleFetcherCloseRevokesLateSnapshotEmission (0.12s)
+=== RUN   TestRuleFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestRuleFetcherCloseRevokesBlockedProductionPublication (0.08s)
+=== RUN   TestSidecarRejectsRevokedParserOwner
+--- PASS: TestSidecarRejectsRevokedParserOwner (0.06s)
+PASS
+ok  	github.com/metacubex/mihomo/rules/provider	2.704s
+
+exit=0

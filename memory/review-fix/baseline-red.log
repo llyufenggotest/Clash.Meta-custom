@@ -1,0 +1,15 @@
+$ go test -overlay F:\Temp\oix-test\FlclashYF-095-repair-memory\core\mihomo\memory\review-fix\.baseline-yrmi02ms\overlay.json ./component/resource -run ^TestReview -count=1 -v
+=== RUN   TestReviewCallbackCloseReentry
+    fetcher_review_test.go:34: onUpdate -> Close deadlocked
+--- FAIL: TestReviewCallbackCloseReentry (0.21s)
+=== RUN   TestReviewSlowCallbackCloseBound
+    fetcher_review_test.go:49: Close waited for uncancellable callback
+--- FAIL: TestReviewSlowCallbackCloseBound (0.21s)
+=== RUN   TestReviewClosedUpdateStartsNoRead
+    fetcher_review_test.go:67: closed work: reads=100 callbacks=0
+--- FAIL: TestReviewClosedUpdateStartsNoRead (0.00s)
+FAIL
+FAIL	github.com/metacubex/mihomo/component/resource	0.448s
+FAIL
+
+exit=1

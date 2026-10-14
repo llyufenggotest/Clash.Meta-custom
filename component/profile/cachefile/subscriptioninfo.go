@@ -1,6 +1,7 @@
 package cachefile
 
 import (
+	"context"
 	"github.com/metacubex/mihomo/log"
 
 	"github.com/metacubex/bbolt"
@@ -24,7 +25,14 @@ func (c *CacheFile) SetSubscriptionInfo(name string, userInfo string) {
 		return
 	}
 }
+func (c *CacheFile) SetSubscriptionInfoOwned(ctx context.Context, name, userInfo string) error {
+	return writeOwnedMetadata(ctx, "subscription", name, []byte(userInfo))
+}
 func (c *CacheFile) GetSubscriptionInfo(name string) (userInfo string) {
+	if data, err := readOwnedMetadata("subscription", name); err == nil {
+		return string(data)
+	}
+
 	if c.DB == nil {
 		return
 	}

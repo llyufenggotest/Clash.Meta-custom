@@ -23,6 +23,10 @@ func (v *lateReadVehicle) Path() string         { return v.path }
 func (v *lateReadVehicle) Url() string          { return "test://late" }
 func (v *lateReadVehicle) Proxy() string        { return "" }
 func (v *lateReadVehicle) Write(b []byte) error { v.writes++; return os.WriteFile(v.path, b, 0600) }
+func (v *lateReadVehicle) PrepareWrite(ctx context.Context, b []byte) (*P.PreparedWrite, error) {
+	v.writes++
+	return P.PrepareFileWrite(ctx, v.path, b)
+}
 func (v *lateReadVehicle) Read(_ context.Context, _ utils.HashType) ([]byte, utils.HashType, error) {
 	close(v.entered)
 	<-v.release

@@ -1,0 +1,32 @@
+name: Fetcher terminal-close review gate
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fetcher-review:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Immutable baseline must reproduce real RED
+        run: python3 memory/review-fix/verify_fetcher.py baseline
+      - name: Normal, low-memory and stress behavior
+        run: python3 memory/review-fix/verify_fetcher.py green
+      - name: Actual race detector gate (no skip)
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          set -o pipefail
+          go test -race ./component/resource ./adapter/provider ./rules/provider ./tunnel ./common/utils ./component/profile/cachefile -count=1 -v | tee memory/review-fix/macos-race.log
+          go test -race -tags with_low_memory ./component/resource ./adapter/provider ./rules/provider ./tunnel -count=1 -v | tee memory/review-fix/macos-lowmem-race.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fetcher-review-evidence
+          path: memory/review-fix/*.log

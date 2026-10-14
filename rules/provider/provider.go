@@ -218,19 +218,25 @@ func NewRuleSetProvider(name string, behavior P.RuleBehavior, format P.RuleForma
 	}
 
 	var wrapper *RuleSetProvider
-	onUpdate := func(loaded loadedRuleStrategy) {
+	onUpdate := func(owner *resource.Owner, loaded loadedRuleStrategy) {
 		wrapper.readyMu.Lock()
-		rp.strategy = loaded.strategy
-		wrapper.readyDigest = loaded.digest
-		wrapper.readyContent = loaded.content
+		err := owner.Commit(func() {
+			rp.strategy = loaded.strategy
+			wrapper.readyDigest = loaded.digest
+			wrapper.readyContent = loaded.content
+		})
 		wrapper.readyMu.Unlock()
+		if err != nil {
+			return
+		}
 		if tunnel == nil {
 			return
 		}
 		providers, release := tunnel.AcquireRuleProviders()
 		defer release()
 		if providers[rp.Name()] == wrapper {
-			tunnel.RuleUpdateCallback().Emit(P.RuleUpdate{Name: rp.Name(), Strategy: loaded.strategy})
+			emit := tunnel.RuleUpdateCallback().PrepareEmit(P.RuleUpdate{Name: rp.Name(), Strategy: loaded.strategy})
+			_ = owner.Commit(emit)
 		}
 	}
 
@@ -238,7 +244,7 @@ func NewRuleSetProvider(name string, behavior P.RuleBehavior, format P.RuleForma
 	if len(payload) > 0 { // using as fallback rules
 		rp.strategy = rulesParseInline(payload, rp.strategy)
 	}
-	rp.Fetcher = resource.NewFetcher(name, interval, vehicle, bundleFile, func(bytes []byte) (loadedRuleStrategy, error) {
+	rp.Fetcher = resource.NewOwnedFetcher(name, interval, vehicle, bundleFile, func(owner *resource.Owner, bytes []byte) (loadedRuleStrategy, error) {
 		// Memory-constrained builds (the iOS Network Extension) try the
 		// pre-computed MRS sidecar first: building the matcher from raw text is
 		// what spikes the footprint, and the sidecar skips that entirely while
@@ -285,7 +291,7 @@ func NewRuleSetProvider(name string, behavior P.RuleBehavior, format P.RuleForma
 		// On unconstrained builds, persist the finished bitmap so the extension
 		// can load it next time without paying the build cost.
 		if maxLowMemoryRuleCount == 0 && format != P.MrsRule {
-			writeSidecar(vehicle.Path(), bytes, behavior, strategy)
+			writeSidecarOwned(owner, vehicle.Path(), bytes, behavior, strategy)
 			if strategy.Count() > extensionRawRuleBudget && behavior != P.Classical {
 				sidecarSnapshot, err = os.ReadFile(sidecarPath(vehicle.Path()))
 				if err != nil {

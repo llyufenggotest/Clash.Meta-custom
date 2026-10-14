@@ -1,0 +1,488 @@
+$ go test -tags with_low_memory ./component/resource ./adapter/provider ./rules/provider ./tunnel ./common/utils ./component/profile/cachefile -count=1 -v
+=== RUN   TestFetcherCloseDoesNotJoinParserOrAllowItsLateCommit
+--- PASS: TestFetcherCloseDoesNotJoinParserOrAllowItsLateCommit (0.00s)
+=== RUN   TestFetcherBackgroundAdmissionIsIdempotent
+--- PASS: TestFetcherBackgroundAdmissionIsIdempotent (0.02s)
+=== RUN   TestFetcherParseFailureRetainsPreviousFileAndHash
+--- PASS: TestFetcherParseFailureRetainsPreviousFileAndHash (0.10s)
+=== RUN   TestFetcherCloseRejectsLateReadPublication
+--- PASS: TestFetcherCloseRejectsLateReadPublication (0.00s)
+=== RUN   TestFetcherCloseRejectsSideUpdate
+--- PASS: TestFetcherCloseRejectsSideUpdate (0.00s)
+=== RUN   TestFetcherClosePreventsWatcherRestart
+--- PASS: TestFetcherClosePreventsWatcherRestart (0.02s)
+=== RUN   TestFetcherConcurrentMetadataSnapshot
+--- PASS: TestFetcherConcurrentMetadataSnapshot (16.81s)
+=== RUN   TestReviewReadAdmissionDoesNotSpillWorkers
+--- PASS: TestReviewReadAdmissionDoesNotSpillWorkers (0.00s)
+=== RUN   TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile
+--- PASS: TestReviewCloseDoesNotJoinWritePreparationOrPublishLateFile (0.04s)
+=== RUN   TestReviewOwnedCallbackCancellationAndNoWorkerSpill
+--- PASS: TestReviewOwnedCallbackCancellationAndNoWorkerSpill (1.90s)
+=== RUN   TestReviewCallbackCloseReentry
+--- PASS: TestReviewCallbackCloseReentry (0.06s)
+=== RUN   TestReviewSlowCallbackCloseBound
+--- PASS: TestReviewSlowCallbackCloseBound (0.03s)
+=== RUN   TestReviewClosedUpdateStartsNoRead
+--- PASS: TestReviewClosedUpdateStartsNoRead (0.00s)
+PASS
+ok  	github.com/metacubex/mihomo/component/resource	19.091s
+=== RUN   TestOwnedProviderMetadataRejectsCanceledPreparation
+--- PASS: TestOwnedProviderMetadataRejectsCanceledPreparation (0.10s)
+=== RUN   TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag
+--- PASS: TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag (0.13s)
+=== RUN   TestProxyFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestProxyFetcherCloseRevokesBlockedProductionPublication (0.05s)
+=== RUN   TestSuspendHealthCheckSkipsChecksUntilResume
+--- PASS: TestSuspendHealthCheckSkipsChecksUntilResume (0.00s)
+=== RUN   TestOverrideExprDecode
+--- PASS: TestOverrideExprDecode (0.00s)
+=== RUN   TestOverrideExprTextRoundTrip
+--- PASS: TestOverrideExprTextRoundTrip (0.00s)
+=== RUN   TestOverrideExprAssignments
+--- PASS: TestOverrideExprAssignments (0.00s)
+=== RUN   TestOverrideExprUpdateFunctionsAndConditionalPath
+--- PASS: TestOverrideExprUpdateFunctionsAndConditionalPath (0.00s)
+=== RUN   TestOverrideExprCollectionsAndDelete
+--- PASS: TestOverrideExprCollectionsAndDelete (0.00s)
+=== RUN   TestOverrideExprDeleteUsesOriginalArrayIndexes
+--- PASS: TestOverrideExprDeleteUsesOriginalArrayIndexes (0.00s)
+=== RUN   TestOverrideExprRunsAfterStructuredOverride
+--- PASS: TestOverrideExprRunsAfterStructuredOverride (0.00s)
+=== RUN   TestOverrideExprYQCompatibility
+--- PASS: TestOverrideExprYQCompatibility (0.00s)
+=== RUN   TestOverrideExprOperatorsAndFunctions
+=== RUN   TestOverrideExprOperatorsAndFunctions/negative_literal
+=== RUN   TestOverrideExprOperatorsAndFunctions/not
+=== RUN   TestOverrideExprOperatorsAndFunctions/numeric_subtraction
+=== RUN   TestOverrideExprOperatorsAndFunctions/division
+=== RUN   TestOverrideExprOperatorsAndFunctions/string_division
+=== RUN   TestOverrideExprOperatorsAndFunctions/empty_string_division
+=== RUN   TestOverrideExprOperatorsAndFunctions/split_null_can_default
+=== RUN   TestOverrideExprOperatorsAndFunctions/modulo
+=== RUN   TestOverrideExprOperatorsAndFunctions/float_modulo
+=== RUN   TestOverrideExprOperatorsAndFunctions/repeat
+=== RUN   TestOverrideExprOperatorsAndFunctions/repeat_with_integer_first
+=== RUN   TestOverrideExprOperatorsAndFunctions/multiply_null_identity
+=== RUN   TestOverrideExprOperatorsAndFunctions/multiply_arrays_replaces_left
+=== RUN   TestOverrideExprOperatorsAndFunctions/sub_replaces_all
+=== RUN   TestOverrideExprOperatorsAndFunctions/test
+=== RUN   TestOverrideExprOperatorsAndFunctions/contains_string
+=== RUN   TestOverrideExprOperatorsAndFunctions/contains_array
+=== RUN   TestOverrideExprOperatorsAndFunctions/contains_scalar
+=== RUN   TestOverrideExprOperatorsAndFunctions/string_plus_number
+=== RUN   TestOverrideExprOperatorsAndFunctions/array_plus_scalar
+=== RUN   TestOverrideExprOperatorsAndFunctions/null_subtraction
+=== RUN   TestOverrideExprOperatorsAndFunctions/shallow_map_addition
+=== RUN   TestOverrideExprOperatorsAndFunctions/not_equal
+=== RUN   TestOverrideExprOperatorsAndFunctions/numeric_types_are_distinct
+=== RUN   TestOverrideExprOperatorsAndFunctions/scalar_equality_uses_text
+=== RUN   TestOverrideExprOperatorsAndFunctions/boolean_equality_uses_text
+=== RUN   TestOverrideExprOperatorsAndFunctions/less_than
+=== RUN   TestOverrideExprOperatorsAndFunctions/boolean_or
+=== RUN   TestOverrideExprOperatorsAndFunctions/trim_downcase
+=== RUN   TestOverrideExprOperatorsAndFunctions/comma_function_arguments
+=== RUN   TestOverrideExprOperatorsAndFunctions/to_string
+=== RUN   TestOverrideExprOperatorsAndFunctions/map_to_string
+=== RUN   TestOverrideExprOperatorsAndFunctions/type
+=== RUN   TestOverrideExprOperatorsAndFunctions/map_type
+=== RUN   TestOverrideExprOperatorsAndFunctions/array_keys
+=== RUN   TestOverrideExprOperatorsAndFunctions/has_array_index
+=== RUN   TestOverrideExprOperatorsAndFunctions/has_negative_array_index
+=== RUN   TestOverrideExprOperatorsAndFunctions/contains_keeps_scalar_tags_distinct
+=== RUN   TestOverrideExprOperatorsAndFunctions/test_accepts_global_option
+=== RUN   TestOverrideExprOperatorsAndFunctions/null_alternative
+--- PASS: TestOverrideExprOperatorsAndFunctions (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/negative_literal (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/not (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/numeric_subtraction (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/division (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/string_division (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/empty_string_division (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/split_null_can_default (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/modulo (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/float_modulo (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/repeat (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/repeat_with_integer_first (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/multiply_null_identity (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/multiply_arrays_replaces_left (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/sub_replaces_all (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/test (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/contains_string (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/contains_array (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/contains_scalar (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/string_plus_number (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/array_plus_scalar (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/null_subtraction (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/shallow_map_addition (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/not_equal (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/numeric_types_are_distinct (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/scalar_equality_uses_text (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/boolean_equality_uses_text (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/less_than (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/boolean_or (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/trim_downcase (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/comma_function_arguments (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/to_string (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/map_to_string (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/type (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/map_type (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/array_keys (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/has_array_index (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/has_negative_array_index (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/contains_keeps_scalar_tags_distinct (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/test_accepts_global_option (0.00s)
+    --- PASS: TestOverrideExprOperatorsAndFunctions/null_alternative (0.00s)
+=== RUN   TestOverrideExprDivisionAndModuloByZero
+--- PASS: TestOverrideExprDivisionAndModuloByZero (0.00s)
+=== RUN   TestOverrideExprSelectAndPipelines
+--- PASS: TestOverrideExprSelectAndPipelines (0.00s)
+=== RUN   TestOverrideExprYQBehaviorDetails
+=== RUN   TestOverrideExprYQBehaviorDetails/scalar_path_produces_null
+=== RUN   TestOverrideExprYQBehaviorDetails/scalar_path_can_default
+=== RUN   TestOverrideExprYQBehaviorDetails/recursive_contains_array
+=== RUN   TestOverrideExprYQBehaviorDetails/recursive_contains_map
+=== RUN   TestOverrideExprYQBehaviorDetails/float_type
+=== RUN   TestOverrideExprYQBehaviorDetails/number_length
+=== RUN   TestOverrideExprYQBehaviorDetails/bool_length
+=== RUN   TestOverrideExprYQBehaviorDetails/null_length
+=== RUN   TestOverrideExprYQBehaviorDetails/array_length
+=== RUN   TestOverrideExprYQBehaviorDetails/map_length
+=== RUN   TestOverrideExprYQBehaviorDetails/unicode_byte_length
+=== RUN   TestOverrideExprYQBehaviorDetails/join_skips_collections
+=== RUN   TestOverrideExprYQBehaviorDetails/has_rejects_float_index
+=== RUN   TestOverrideExprYQBehaviorDetails/decimal_leading_zero
+=== RUN   TestOverrideExprYQBehaviorDetails/octal
+=== RUN   TestOverrideExprYQBehaviorDetails/hexadecimal
+=== RUN   TestOverrideExprYQBehaviorDetails/float
+=== RUN   TestOverrideExprYQBehaviorDetails/unknown_string_escape_stays_literal
+=== RUN   TestOverrideExprYQBehaviorDetails/array_equality
+=== RUN   TestOverrideExprYQBehaviorDetails/mapping_inequality
+=== RUN   TestOverrideExprYQBehaviorDetails/null_comparison
+=== RUN   TestOverrideExprYQBehaviorDetails/null_equality_comparison
+--- PASS: TestOverrideExprYQBehaviorDetails (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/scalar_path_produces_null (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/scalar_path_can_default (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/recursive_contains_array (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/recursive_contains_map (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/float_type (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/number_length (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/bool_length (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/null_length (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/array_length (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/map_length (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/unicode_byte_length (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/join_skips_collections (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/has_rejects_float_index (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/decimal_leading_zero (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/octal (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/hexadecimal (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/float (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/unknown_string_escape_stays_literal (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/array_equality (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/mapping_inequality (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/null_comparison (0.00s)
+    --- PASS: TestOverrideExprYQBehaviorDetails/null_equality_comparison (0.00s)
+=== RUN   TestOverrideExprInterpolationAndCollections
+--- PASS: TestOverrideExprInterpolationAndCollections (0.00s)
+=== RUN   TestOverrideExprMultiResultPipelines
+--- PASS: TestOverrideExprMultiResultPipelines (0.00s)
+=== RUN   TestOverrideExprMappingValuesUseYQStreamSemantics
+--- PASS: TestOverrideExprMappingValuesUseYQStreamSemantics (0.00s)
+=== RUN   TestOverrideExprRequiresMultiResultsToBeCollected
+--- PASS: TestOverrideExprRequiresMultiResultsToBeCollected (0.00s)
+=== RUN   TestOverrideExprTopLevelFilterPipeline
+--- PASS: TestOverrideExprTopLevelFilterPipeline (0.00s)
+=== RUN   TestOverrideExprErrors
+=== RUN   TestOverrideExprErrors/syntax
+=== RUN   TestOverrideExprErrors/runtime
+=== RUN   TestOverrideExprErrors/string_repeat_limit
+--- PASS: TestOverrideExprErrors (0.00s)
+    --- PASS: TestOverrideExprErrors/syntax (0.00s)
+    --- PASS: TestOverrideExprErrors/runtime (0.00s)
+    --- PASS: TestOverrideExprErrors/string_repeat_limit (0.00s)
+PASS
+ok  	github.com/metacubex/mihomo/adapter/provider	0.376s
+=== RUN   TestRuleFetcherCloseRevokesLateSnapshotEmission
+--- PASS: TestRuleFetcherCloseRevokesLateSnapshotEmission (0.13s)
+=== RUN   TestRuleFetcherCloseRevokesBlockedProductionPublication
+--- PASS: TestRuleFetcherCloseRevokesBlockedProductionPublication (0.08s)
+=== RUN   TestSidecarRejectsRevokedParserOwner
+--- PASS: TestSidecarRejectsRevokedParserOwner (0.08s)
+=== RUN   TestRuleSetBudgetIsBuildTagged
+    lowmem_budget_test.go:19: maxLowMemoryRuleCount = 10000
+--- PASS: TestRuleSetBudgetIsBuildTagged (0.00s)
+=== RUN   TestRuleSetWithinBudgetLoads
+--- PASS: TestRuleSetWithinBudgetLoads (0.01s)
+=== RUN   TestRuleSetOverBudget
+--- PASS: TestRuleSetOverBudget (0.10s)
+=== RUN   TestSidecarSurvivesIdenticalRawTouch
+time="2026-10-14T22:29:28.851462800+08:00" level=info msg="[Provider] wrote MRS sidecar for F:\\Temp\\User\\TestSidecarSurvivesIdenticalRawTouch4157961957\\001\\rules.yaml (12000 rules, 2992 bytes)"
+--- PASS: TestSidecarSurvivesIdenticalRawTouch (0.10s)
+=== RUN   TestSidecarRejectsDifferentParserInput
+time="2026-10-14T22:29:28.943108100+08:00" level=info msg="[Provider] wrote MRS sidecar for F:\\Temp\\User\\TestSidecarRejectsDifferentParserInput1943703887\\001\\rules.yaml (12000 rules, 2992 bytes)"
+--- PASS: TestSidecarRejectsDifferentParserInput (0.07s)
+=== RUN   TestSidecarRejectsPayloadCorruptionAndWrongBehavior
+time="2026-10-14T22:29:29.034594800+08:00" level=info msg="[Provider] wrote MRS sidecar for F:\\Temp\\User\\TestSidecarRejectsPayloadCorruptionAndWrongBehavior677410311\\001\\rules.yaml (12000 rules, 2992 bytes)"
+--- PASS: TestSidecarRejectsPayloadCorruptionAndWrongBehavior (0.09s)
+=== RUN   TestFetcherFirstDownloadAndChangedDownload
+time="2026-10-14T22:29:29.165170900+08:00" level=info msg="[Provider] wrote MRS sidecar for F:\\Temp\\User\\TestFetcherFirstDownloadAndChangedDownload3847251376\\002\\cache.yaml (12000 rules, 2992 bytes)"
+time="2026-10-14T22:29:29.167766300+08:00" level=info msg="[Provider] freshness loaded 12000 rules from MRS sidecar (skipped trie build)"
+time="2026-10-14T22:29:29.457655500+08:00" level=info msg="[Provider] wrote MRS sidecar for F:\\Temp\\User\\TestFetcherFirstDownloadAndChangedDownload3847251376\\002\\cache.yaml (12000 rules, 2990 bytes)"
+time="2026-10-14T22:29:29.459194200+08:00" level=info msg="[Provider] freshness loaded 12000 rules from MRS sidecar (skipped trie build)"
+time="2026-10-14T22:29:29.468791700+08:00" level=info msg="[Provider] freshness loaded 12000 rules from MRS sidecar (skipped trie build)"
+time="2026-10-14T22:29:29.647473400+08:00" level=info msg="[Provider] freshness loaded 12000 rules from MRS sidecar (skipped trie build)"
+--- PASS: TestFetcherFirstDownloadAndChangedDownload (0.62s)
+=== RUN   TestMrsDecodeLargeFullFidelity
+=== RUN   TestMrsDecodeLargeFullFidelity/Domain
+    mrs_memory_test.go:49: Domain decode allocation = 11745200 bytes
+=== RUN   TestMrsDecodeLargeFullFidelity/IPCIDR
+    mrs_memory_test.go:49: IPCIDR decode allocation = 10565784 bytes
+--- PASS: TestMrsDecodeLargeFullFidelity (0.15s)
+    --- PASS: TestMrsDecodeLargeFullFidelity/Domain (0.12s)
+    --- PASS: TestMrsDecodeLargeFullFidelity/IPCIDR (0.03s)
+=== RUN   TestSidecarRoundTripsEveryRule
+time="2026-10-14T22:29:29.876708000+08:00" level=info msg="[Provider] wrote MRS sidecar for F:\\Temp\\User\\TestSidecarRoundTripsEveryRule3678446799\\001\\big.yaml (12000 rules, 2992 bytes)"
+--- PASS: TestSidecarRoundTripsEveryRule (0.07s)
+=== RUN   TestCappedBuildLoadsOversizedListFromSidecar
+time="2026-10-14T22:29:30.042942300+08:00" level=info msg="[Provider] wrote MRS sidecar for F:\\Temp\\User\\TestCappedBuildLoadsOversizedListFromSidecar3963575337\\001\\big.yaml (12000 rules, 2992 bytes)"
+--- PASS: TestCappedBuildLoadsOversizedListFromSidecar (0.17s)
+=== RUN   TestStaleSidecarIsRefused
+--- PASS: TestStaleSidecarIsRefused (0.01s)
+=== RUN   TestCorruptSidecarErrors
+--- PASS: TestCorruptSidecarErrors (0.00s)
+=== RUN   TestSmallListsGetNoSidecar
+--- PASS: TestSmallListsGetNoSidecar (0.01s)
+=== RUN   TestRuleProviderPreflightCallbackIsolation
+--- PASS: TestRuleProviderPreflightCallbackIsolation (0.22s)
+=== RUN   TestPrepareRuleProviderBuildsSidecarWithoutTunnel
+--- PASS: TestPrepareRuleProviderBuildsSidecarWithoutTunnel (0.06s)
+=== RUN   TestPrepareRuleProviderUsesImmutableTargetNotDefinitionPath
+--- PASS: TestPrepareRuleProviderUsesImmutableTargetNotDefinitionPath (0.06s)
+=== RUN   TestPrepareRuleProviderRejectsClassicalSidecar
+--- PASS: TestPrepareRuleProviderRejectsClassicalSidecar (0.00s)
+=== RUN   TestStrategyUsesReadySnapshotLock
+--- PASS: TestStrategyUsesReadySnapshotLock (0.05s)
+=== RUN   TestMarshalJSONUsesReadySnapshotLock
+--- PASS: TestMarshalJSONUsesReadySnapshotLock (0.12s)
+=== RUN   TestReloadReusesUnchangedPreparedMatcher
+time="2026-10-14T22:29:30.653861400+08:00" level=info msg="[Provider] wrote MRS sidecar for F:\\Temp\\User\\TestReloadReusesUnchangedPreparedMatcher3335279122\\001\\rules.yaml (12000 rules, 2992 bytes)"
+time="2026-10-14T22:29:30.656749300+08:00" level=info msg="[Provider] freshness loaded 12000 rules from MRS sidecar (skipped trie build)"
+--- PASS: TestReloadReusesUnchangedPreparedMatcher (0.09s)
+=== RUN   TestReloadRejectsChangedArtifacts
+=== RUN   TestReloadRejectsChangedArtifacts/raw
+time="2026-10-14T22:29:30.742272900+08:00" level=info msg="[Provider] wrote MRS sidecar for F:\\Temp\\User\\TestReloadRejectsChangedArtifactsraw2100731398\\001\\rules.yaml (12000 rules, 2992 bytes)"
+time="2026-10-14T22:29:30.744935500+08:00" level=info msg="[Provider] freshness loaded 12000 rules from MRS sidecar (skipped trie build)"
+=== RUN   TestReloadRejectsChangedArtifacts/sidecar
+time="2026-10-14T22:29:30.967243700+08:00" level=info msg="[Provider] wrote MRS sidecar for F:\\Temp\\User\\TestReloadRejectsChangedArtifactssidecar1692773764\\001\\rules.yaml (12000 rules, 2992 bytes)"
+time="2026-10-14T22:29:30.969425600+08:00" level=info msg="[Provider] freshness loaded 12000 rules from MRS sidecar (skipped trie build)"
+=== RUN   TestReloadRejectsChangedArtifacts/missing
+time="2026-10-14T22:29:31.151797000+08:00" level=info msg="[Provider] wrote MRS sidecar for F:\\Temp\\User\\TestReloadRejectsChangedArtifactsmissing916523103\\001\\rules.yaml (12000 rules, 2992 bytes)"
+time="2026-10-14T22:29:31.154517400+08:00" level=info msg="[Provider] freshness loaded 12000 rules from MRS sidecar (skipped trie build)"
+=== RUN   TestReloadRejectsChangedArtifacts/behavior
+time="2026-10-14T22:29:31.351235700+08:00" level=info msg="[Provider] wrote MRS sidecar for F:\\Temp\\User\\TestReloadRejectsChangedArtifactsbehavior2666466443\\001\\rules.yaml (12000 rules, 2992 bytes)"
+time="2026-10-14T22:29:31.353619000+08:00" level=info msg="[Provider] freshness loaded 12000 rules from MRS sidecar (skipped trie build)"
+=== RUN   TestReloadRejectsChangedArtifacts/format
+time="2026-10-14T22:29:31.451747900+08:00" level=info msg="[Provider] wrote MRS sidecar for F:\\Temp\\User\\TestReloadRejectsChangedArtifactsformat2251404737\\001\\rules.yaml (12000 rules, 2992 bytes)"
+time="2026-10-14T22:29:31.453970200+08:00" level=info msg="[Provider] freshness loaded 12000 rules from MRS sidecar (skipped trie build)"
+--- PASS: TestReloadRejectsChangedArtifacts (0.80s)
+    --- PASS: TestReloadRejectsChangedArtifacts/raw (0.22s)
+    --- PASS: TestReloadRejectsChangedArtifacts/sidecar (0.20s)
+    --- PASS: TestReloadRejectsChangedArtifacts/missing (0.18s)
+    --- PASS: TestReloadRejectsChangedArtifacts/behavior (0.10s)
+    --- PASS: TestReloadRejectsChangedArtifacts/format (0.10s)
+=== RUN   TestReloadRebuildsChangedSidecarWithSameSource
+time="2026-10-14T22:29:31.542985900+08:00" level=info msg="[Provider] wrote MRS sidecar for F:\\Temp\\User\\TestReloadRebuildsChangedSidecarWithSameSource3584165925\\001\\rules.yaml (12000 rules, 2992 bytes)"
+time="2026-10-14T22:29:31.545573500+08:00" level=info msg="[Provider] freshness loaded 12000 rules from MRS sidecar (skipped trie build)"
+time="2026-10-14T22:29:31.627147500+08:00" level=info msg="[Provider] wrote MRS sidecar for F:\\Temp\\User\\TestReloadRebuildsChangedSidecarWithSameSource3584165925\\001\\rules.yaml (12000 rules, 2990 bytes)"
+time="2026-10-14T22:29:31.629192500+08:00" level=info msg="[Provider] freshness loaded 12000 rules from MRS sidecar (skipped trie build)"
+--- PASS: TestReloadRebuildsChangedSidecarWithSameSource (0.18s)
+=== RUN   TestReloadSharedMatcherSurvivesUpdateAndRetirement
+--- PASS: TestReloadSharedMatcherSurvivesUpdateAndRetirement (0.06s)
+=== RUN   TestReloadMrsBehaviorAndFormatIsolation
+=== RUN   TestReloadMrsBehaviorAndFormatIsolation/Domain
+=== RUN   TestReloadMrsBehaviorAndFormatIsolation/IPCIDR
+--- PASS: TestReloadMrsBehaviorAndFormatIsolation (0.02s)
+    --- PASS: TestReloadMrsBehaviorAndFormatIsolation/Domain (0.00s)
+    --- PASS: TestReloadMrsBehaviorAndFormatIsolation/IPCIDR (0.01s)
+=== RUN   TestRuleUpdateCallbackCarriesStableStrategySnapshot
+--- PASS: TestRuleUpdateCallbackCarriesStableStrategySnapshot (0.00s)
+=== RUN   TestDomainStrategyDumpMrs
+=== RUN   TestDomainStrategyDumpMrs/suffix-only
+=== RUN   TestDomainStrategyDumpMrs/exact-only
+=== RUN   TestDomainStrategyDumpMrs/merge-terminals
+=== RUN   TestDomainStrategyDumpMrs/deduplicate
+=== RUN   TestDomainStrategyDumpMrs/mixed
+=== RUN   TestDomainStrategyDumpMrs/wildcards
+--- PASS: TestDomainStrategyDumpMrs (0.00s)
+    --- PASS: TestDomainStrategyDumpMrs/suffix-only (0.00s)
+    --- PASS: TestDomainStrategyDumpMrs/exact-only (0.00s)
+    --- PASS: TestDomainStrategyDumpMrs/merge-terminals (0.00s)
+    --- PASS: TestDomainStrategyDumpMrs/deduplicate (0.00s)
+    --- PASS: TestDomainStrategyDumpMrs/mixed (0.00s)
+    --- PASS: TestDomainStrategyDumpMrs/wildcards (0.00s)
+PASS
+ok  	github.com/metacubex/mihomo/rules/provider	3.411s
+=== RUN   TestStaleProvidersAreClosedOnSwitch
+time="2026-10-14T22:29:28.410409400+08:00" level=info msg="[Provider] closed stale provider sub-a-1"
+time="2026-10-14T22:29:28.428541900+08:00" level=info msg="[Provider] closed stale provider sub-a-2"
+--- PASS: TestStaleProvidersAreClosedOnSwitch (0.02s)
+=== RUN   TestSameNameRebuildStillClosesTheOldObject
+time="2026-10-14T22:29:28.428541900+08:00" level=info msg="[Provider] closed stale provider provider"
+--- PASS: TestSameNameRebuildStillClosesTheOldObject (0.00s)
+=== RUN   TestRetainedProviderIsNotClosed
+time="2026-10-14T22:29:28.428541900+08:00" level=info msg="[Provider] closed stale provider dropped"
+--- PASS: TestRetainedProviderIsNotClosed (0.00s)
+=== RUN   TestFirstLoadHasNothingToClose
+--- PASS: TestFirstLoadHasNothingToClose (0.00s)
+=== RUN   TestNilProviderEntryIsSkipped
+--- PASS: TestNilProviderEntryIsSkipped (0.00s)
+=== RUN   TestUpdateProxiesClosesTheReplacedProviders
+time="2026-10-14T22:29:28.428541900+08:00" level=info msg="[Provider] closed stale provider subscription-a"
+--- PASS: TestUpdateProxiesClosesTheReplacedProviders (0.00s)
+=== RUN   TestUpdateRulesClosesReplacedAndDeletedProviders
+time="2026-10-14T22:29:28.428541900+08:00" level=info msg="[RuleProvider] closed stale provider replaced"
+time="2026-10-14T22:29:28.428541900+08:00" level=info msg="[RuleProvider] closed stale provider deleted"
+time="2026-10-14T22:29:28.429604100+08:00" level=info msg="[RuleProvider] closed stale provider incoming"
+--- PASS: TestUpdateRulesClosesReplacedAndDeletedProviders (0.00s)
+=== RUN   TestUpdateRulesDoesNotCloseRetainedProviderInstance
+time="2026-10-14T22:29:28.449883400+08:00" level=info msg="[RuleProvider] closed stale provider shared"
+--- PASS: TestUpdateRulesDoesNotCloseRetainedProviderInstance (0.02s)
+=== RUN   TestUpdateRulesDefersCloseUntilReaderReleases
+time="2026-10-14T22:29:28.470566200+08:00" level=info msg="[RuleProvider] closed stale provider leased"
+--- PASS: TestUpdateRulesDefersCloseUntilReaderReleases (0.04s)
+=== RUN   TestRetireRuleProvidersTimeoutStillClosesAfterRelease
+time="2026-10-14T22:29:28.502326400+08:00" level=warning msg="[RuleProvider] timed out waiting for rule snapshot readers"
+time="2026-10-14T22:29:28.502326400+08:00" level=info msg="[RuleProvider] closed stale provider shutdown"
+--- PASS: TestRetireRuleProvidersTimeoutStillClosesAfterRelease (0.01s)
+=== RUN   TestRetireRuleProvidersClearsSnapshotAndIsIdempotent
+time="2026-10-14T22:29:28.504008100+08:00" level=info msg="[RuleProvider] closed stale provider active"
+--- PASS: TestRetireRuleProvidersClearsSnapshotAndIsIdempotent (0.00s)
+=== RUN   TestRuleSetMatchDoesNotNestConfigReadLockDuringReload
+time="2026-10-14T22:29:28.504008100+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.505255100+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.506822300+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.507900300+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.509280500+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.510363700+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.511466900+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.512536800+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.513990300+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.515088800+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.516157100+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.517234400+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.518301900+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.519413400+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.520487600+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.521654100+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.523173600+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.524853800+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.525927900+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.526991000+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.528049700+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.529131200+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.530191800+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.531252100+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.532312200+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.533828500+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.535368400+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.536912000+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.538044000+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.539194400+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.540329000+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.541401400+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.542472300+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.543994900+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.545544600+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.546683400+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.547821700+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.548930200+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.550037500+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.551588900+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.552672000+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.554195200+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.555929800+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.557519400+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.559594700+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.560696200+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.561765500+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.563409800+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.564647300+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.565756000+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.566835300+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.567960900+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.569060600+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.570165700+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.571289800+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.572368500+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.573477900+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.574550500+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.575642500+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.577161300+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.578680300+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.580199300+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.581720300+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.582832800+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.583915600+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.585427100+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.587100500+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.588642600+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.590164600+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.591263700+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.592735500+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.594339700+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.595646900+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.596778600+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.598390600+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.599564100+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.601130000+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.602707400+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.604242400+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.605759500+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.607527600+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.608692700+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.609770700+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.611311900+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.612413600+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.613498200+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.614557900+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.615614100+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.616983700+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.618528800+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.619638400+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.620737200+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.621828400+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.623483500+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.624629300+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.626146400+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.627284300+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.628382600+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.629493000+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+time="2026-10-14T22:29:28.631160500+08:00" level=info msg="[RuleProvider] closed stale provider nested"
+--- PASS: TestRuleSetMatchDoesNotNestConfigReadLockDuringReload (0.13s)
+PASS
+ok  	github.com/metacubex/mihomo/tunnel	0.285s
+=== RUN   TestMergeRanges
+=== PAUSE TestMergeRanges
+=== RUN   TestUUIDMap
+=== RUN   TestUUIDMap/uuid-test-1
+=== RUN   TestUUIDMap/uuid-test-2
+=== RUN   TestUUIDMap/uuid-map-1
+=== RUN   TestUUIDMap/uuid-map-2
+=== RUN   TestUUIDMap/uuid-map-2#01
+--- PASS: TestUUIDMap (0.00s)
+    --- PASS: TestUUIDMap/uuid-test-1 (0.00s)
+    --- PASS: TestUUIDMap/uuid-test-2 (0.00s)
+    --- PASS: TestUUIDMap/uuid-map-1 (0.00s)
+    --- PASS: TestUUIDMap/uuid-map-2 (0.00s)
+    --- PASS: TestUUIDMap/uuid-map-2#01 (0.00s)
+=== CONT  TestMergeRanges
+--- PASS: TestMergeRanges (0.00s)
+PASS
+ok  	github.com/metacubex/mihomo/common/utils	0.029s
+=== RUN   TestOwnedMetadataPersistsAndRejectsRevokedEpoch
+--- PASS: TestOwnedMetadataPersistsAndRejectsRevokedEpoch (0.34s)
+PASS
+ok  	github.com/metacubex/mihomo/component/profile/cachefile	0.389s
+
+exit=0

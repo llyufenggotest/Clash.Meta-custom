@@ -26,6 +26,24 @@ func (c *Callback[T]) Register(item func(T)) io.Closer {
 	}
 }
 
+// PrepareEmit snapshots listeners before entering a caller's short publication
+// section. The returned function only launches the already selected listeners;
+// it acquires no locks and runs no user code synchronously. Listener invocations
+// are admitted at that launch, and remain asynchronous as with Emit.
+func (c *Callback[T]) PrepareEmit(item T) func() {
+	c.mutex.RLock()
+	var listeners []func(T)
+	for element := c.list.Front(); element != nil; element = element.Next() {
+		listeners = append(listeners, element.Value)
+	}
+	c.mutex.RUnlock()
+	return func() {
+		for _, listener := range listeners {
+			go listener(item)
+		}
+	}
+}
+
 func (c *Callback[T]) Emit(item T) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()

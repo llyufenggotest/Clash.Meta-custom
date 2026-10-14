@@ -92,6 +92,12 @@ func (v *freshnessVehicle) Type() P.VehicleType { return P.HTTP }
 func (v *freshnessVehicle) Read(context.Context, utils.HashType) ([]byte, utils.HashType, error) {
 	return v.data, utils.MakeHash(v.data), nil
 }
+func (v *freshnessVehicle) PrepareWrite(ctx context.Context, b []byte) (*P.PreparedWrite, error) {
+	if v.writeErr != nil {
+		return nil, v.writeErr
+	}
+	return P.PrepareFileWrite(ctx, v.path, b)
+}
 func (v *freshnessVehicle) Write(b []byte) error {
 	if v.writeErr != nil {
 		return v.writeErr

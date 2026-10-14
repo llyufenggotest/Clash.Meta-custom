@@ -19,6 +19,7 @@ import (
 )
 
 type Parser[V any] func([]byte) (V, error)
+type OwnedParser[V any] func(*Owner, []byte) (V, error)
 type BundleFile func() (fs.File, error)
 
 type Fetcher[V any] struct {
@@ -31,15 +32,13 @@ type Fetcher[V any] struct {
 	metadataMu   sync.RWMutex // independent: provider JSON may hold readyMu
 	updatedAt    time.Time
 	hash         utils.HashType
-	parser       Parser[V]
+	parser       OwnedParser[V]
 	interval     time.Duration
-	onUpdate     func(V)
+	onUpdate     func(*Owner, V)
 	watcher      *fswatch.Watcher
-	loadBufMutex sync.Mutex
-	// Serialize publication and background-resource admission with terminal Close.
-	// Do not hold this lock across parser or vehicle.Read: neither is cancellable.
-	lifecycleMu sync.Mutex
-	closed      bool
+	loadSlot     chan struct{} // one operation; canceled callers never queue behind an external closure
+	// The owner mutex protects short final commits and admission only.
+	owner       *Owner
 	pullStarted bool
 	backoff     slowdown.Backoff
 }
@@ -69,9 +68,9 @@ func (f *Fetcher[V]) metadataSnapshot() (utils.HashType, time.Time) {
 }
 
 func (f *Fetcher[V]) setInitialUpdatedAt(value time.Time) {
-	f.lifecycleMu.Lock()
-	defer f.lifecycleMu.Unlock()
-	if !f.closed {
+	f.owner.mu.Lock()
+	defer f.owner.mu.Unlock()
+	if !f.owner.closed {
 		f.setUpdatedAt(value)
 	}
 }
@@ -85,7 +84,7 @@ func (f *Fetcher[V]) setUpdatedAt(value time.Time) {
 // InitialLocal admits only prepared disk content. It deliberately does not fall
 // back to network/bundle after a parse failure, preserving the actionable cause.
 func (f *Fetcher[V]) InitialLocal() (V, error) {
-	if err := f.ctx.Err(); err != nil {
+	if err := f.owner.admit(); err != nil {
 		return lo.Empty[V](), err
 	}
 	buf, err := os.ReadFile(f.vehicle.Path())
@@ -103,7 +102,7 @@ func (f *Fetcher[V]) InitialLocal() (V, error) {
 }
 
 func (f *Fetcher[V]) Initial() (V, error) {
-	if err := f.ctx.Err(); err != nil {
+	if err := f.owner.admit(); err != nil {
 		return lo.Empty[V](), err
 	}
 	if stat, fErr := os.Stat(f.vehicle.Path()); fErr == nil {
@@ -124,6 +123,9 @@ func (f *Fetcher[V]) Initial() (V, error) {
 
 	// parse local file error, fallback to bundle file
 	if f.bundleFile != nil {
+		if err := f.owner.admit(); err != nil {
+			return lo.Empty[V](), err
+		}
 		// bundle file exists, use it first
 		if file, fErr := f.bundleFile(); fErr == nil {
 			defer file.Close()
@@ -165,83 +167,132 @@ func (f *Fetcher[V]) Initial() (V, error) {
 	return contents, nil
 }
 
+func (f *Fetcher[V]) acquire() error {
+	select {
+	case <-f.ctx.Done():
+		return context.Canceled
+	case f.loadSlot <- struct{}{}:
+	}
+	if err := f.owner.admit(); err != nil {
+		<-f.loadSlot
+		return err
+	}
+	return nil
+}
+
 func (f *Fetcher[V]) Update() (V, bool, error) {
+	if err := f.acquire(); err != nil {
+		return lo.Empty[V](), false, err
+	}
+	defer func() { <-f.loadSlot }()
 	currentHash, _ := f.metadataSnapshot()
-	buf, hash, err := f.vehicle.Read(f.ctx, currentHash)
+	buf, hash, err := f.vehicle.Read(P.WithPublicationOwner(f.ctx, f.owner), currentHash)
 	if err != nil {
 		f.backoff.AddAttempt() // add a failed attempt to backoff
 		return lo.Empty[V](), false, err
 	}
-	return f.loadBuf(buf, hash, f.vehicle.Type() != P.File)
+	return f.loadBufAdmitted(buf, hash, f.vehicle.Type() != P.File)
 }
 
+func (f *Fetcher[V]) CommitState(state func()) error { return f.owner.Commit(state) }
+
 func (f *Fetcher[V]) SideUpdate(buf []byte) (V, bool, error) {
+	if err := f.owner.admit(); err != nil {
+		return lo.Empty[V](), false, err
+	}
 	return f.loadBuf(buf, utils.MakeHash(buf), true)
 }
 
 func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (V, bool, error) {
-	f.loadBufMutex.Lock()
-	defer f.loadBufMutex.Unlock()
+	if err := f.acquire(); err != nil {
+		return lo.Empty[V](), false, err
+	}
+	defer func() { <-f.loadSlot }()
+	return f.loadBufAdmitted(buf, hash, updateFile)
+}
 
+func (f *Fetcher[V]) loadBufAdmitted(buf []byte, hash utils.HashType, updateFile bool) (V, bool, error) {
+	// Vehicle methods are external code: resolve outside the owner lock.
+	path := f.vehicle.Path()
 	now := time.Now()
-	f.lifecycleMu.Lock()
-	if f.closed {
-		f.lifecycleMu.Unlock()
+	f.owner.mu.Lock()
+	if f.owner.closed {
+		f.owner.mu.Unlock()
 		return lo.Empty[V](), false, context.Canceled
 	}
 	currentHash, _ := f.metadataSnapshot()
 	if currentHash.Equal(hash) {
-		defer f.lifecycleMu.Unlock()
+		defer f.owner.mu.Unlock()
 		if updateFile {
-			_ = os.Chtimes(f.vehicle.Path(), now, now)
+			_ = os.Chtimes(path, now, now)
 		}
 		f.setUpdatedAt(now)
 		f.backoff.Reset() // no error, reset backoff
 		return lo.Empty[V](), true, nil
 	}
-	f.lifecycleMu.Unlock()
+	f.owner.mu.Unlock()
 
 	if buf == nil { // f.hash has been changed between f.vehicle.Read but should not happen (cause by concurrent)
 		return lo.Empty[V](), true, nil
 	}
 
-	contents, err := f.parser(buf)
+	if err := f.owner.admit(); err != nil {
+		return lo.Empty[V](), false, err
+	}
+	contents, err := f.parser(f.owner, buf)
 	if err != nil {
 		f.backoff.AddAttempt() // add a failed attempt to backoff
 		return lo.Empty[V](), false, err
 	}
-	f.lifecycleMu.Lock()
-	defer f.lifecycleMu.Unlock()
-	if f.closed {
+	if err = f.owner.admit(); err != nil {
+		return lo.Empty[V](), false, err
+	}
+	var prepared *P.PreparedWrite
+	if updateFile {
+		if err = f.owner.admit(); err != nil {
+			return lo.Empty[V](), false, err
+		}
+		prepared, err = f.vehicle.PrepareWrite(f.ctx, buf)
+		if err != nil {
+			return lo.Empty[V](), false, err
+		}
+		defer prepared.Abort()
+	}
+	f.owner.mu.Lock()
+	if f.owner.closed {
+		f.owner.mu.Unlock()
 		return lo.Empty[V](), false, context.Canceled
 	}
-	f.backoff.Reset() // no error, reset backoff
-
-	if updateFile {
-		if err = f.vehicle.Write(buf); err != nil {
+	if prepared != nil {
+		if err = prepared.Publish(); err != nil {
+			f.owner.mu.Unlock()
 			return lo.Empty[V](), false, err
 		}
 	}
+	f.backoff.Reset()
 	f.metadataMu.Lock()
 	f.updatedAt = now
 	f.hash = hash
 	f.metadataMu.Unlock()
-
-	if f.onUpdate != nil {
-		f.onUpdate(contents)
+	// Reserve this invocation before Close can revoke the epoch. Close does
+	// not join it. Owned callbacks recheck the owner at their final commit.
+	callback := f.onUpdate
+	f.owner.mu.Unlock()
+	if callback != nil {
+		callback(f.owner, contents)
 	}
-
 	return contents, false, nil
 }
 
 func (f *Fetcher[V]) Close() error {
-	// Cancel immediately; serialize only with commits, not a pending read/parser.
+	// Revoke the terminal owner; serialize only with short final commits.
+	// Never join an external read/parser/onUpdate or write preparation.
+	f.owner.mu.Lock()
 	f.ctxCancel()
-	f.lifecycleMu.Lock()
-	f.closed = true
+	f.owner.closed = true
 	watcher := f.watcher
 	f.watcher = nil
-	f.lifecycleMu.Unlock()
+	f.owner.mu.Unlock()
 	if watcher != nil {
 		_ = watcher.Close()
 	}
@@ -285,18 +336,19 @@ func (f *Fetcher[V]) pullLoop(forceUpdate bool) {
 }
 
 func (f *Fetcher[V]) startPullLoop(forceUpdate bool) (err error) {
-	f.lifecycleMu.Lock()
-	defer f.lifecycleMu.Unlock()
-	if f.closed {
+	vehicleType, path := f.vehicle.Type(), f.vehicle.Path()
+	f.owner.mu.Lock()
+	defer f.owner.mu.Unlock()
+	if f.owner.closed {
 		return context.Canceled
 	}
 	if f.pullStarted {
 		return nil
 	}
 	// pull contents automatically
-	if f.vehicle.Type() == P.File {
+	if vehicleType == P.File {
 		f.watcher, err = fswatch.NewWatcher(fswatch.Options{
-			Path:     []string{f.vehicle.Path()},
+			Path:     []string{path},
 			Callback: f.updateCallback,
 		})
 		if err != nil {
@@ -335,7 +387,18 @@ func (f *Fetcher[V]) updateWithLog() {
 	return
 }
 
+// NewFetcher preserves legacy closures. An admitted closure may finish after
+// Close; arbitrary side effects inside it are outside Fetcher's control. Use
+// NewOwnedFetcher to cancel preparation and guard provider/cache commits.
 func NewFetcher[V any](name string, interval time.Duration, vehicle P.Vehicle, bundleFile BundleFile, parser Parser[V], onUpdate func(V)) *Fetcher[V] {
+	var callback func(*Owner, V)
+	if onUpdate != nil {
+		callback = func(_ *Owner, v V) { onUpdate(v) }
+	}
+	return NewOwnedFetcher(name, interval, vehicle, bundleFile, func(_ *Owner, b []byte) (V, error) { return parser(b) }, callback)
+}
+
+func NewOwnedFetcher[V any](name string, interval time.Duration, vehicle P.Vehicle, bundleFile BundleFile, parser OwnedParser[V], onUpdate func(*Owner, V)) *Fetcher[V] {
 	ctx, cancel := context.WithCancel(context.Background())
 	minBackoff := 10 * time.Second
 	if interval < minBackoff {
@@ -343,6 +406,8 @@ func NewFetcher[V any](name string, interval time.Duration, vehicle P.Vehicle, b
 	}
 	return &Fetcher[V]{
 		ctx:        ctx,
+		owner:      &Owner{ctx: ctx},
+		loadSlot:   make(chan struct{}, 1),
 		ctxCancel:  cancel,
 		name:       name,
 		bundleFile: bundleFile,

@@ -80,19 +80,24 @@ func (f *FileVehicle) Write(buf []byte) error {
 	return safeWrite(f.path, buf)
 }
 
+func (f *FileVehicle) PrepareWrite(ctx context.Context, buf []byte) (*P.PreparedWrite, error) {
+	return P.PrepareFileWrite(ctx, f.path, buf)
+}
+
 func NewFileVehicle(path string) *FileVehicle {
 	return &FileVehicle{path: path}
 }
 
 type HTTPVehicle struct {
-	url       string
-	path      string
-	proxy     string
-	header    http.Header
-	timeout   time.Duration
-	sizeLimit int64
-	inRead    func(response *http.Response)
-	provider  P.ProxyProvider
+	url         string
+	path        string
+	proxy       string
+	header      http.Header
+	timeout     time.Duration
+	sizeLimit   int64
+	inRead      func(response *http.Response)
+	inReadOwned func(context.Context, *http.Response)
+	provider    P.ProxyProvider
 }
 
 func (h *HTTPVehicle) Url() string {
@@ -115,9 +120,15 @@ func (h *HTTPVehicle) Write(buf []byte) error {
 	return safeWrite(h.path, buf)
 }
 
+func (h *HTTPVehicle) PrepareWrite(ctx context.Context, buf []byte) (*P.PreparedWrite, error) {
+	return P.PrepareFileWrite(ctx, h.path, buf)
+}
+
 func (h *HTTPVehicle) SetInRead(fn func(response *http.Response)) {
 	h.inRead = fn
 }
+
+func (h *HTTPVehicle) SetInReadOwned(fn func(context.Context, *http.Response)) { h.inReadOwned = fn }
 
 func (h *HTTPVehicle) Read(ctx context.Context, oldHash utils.HashType) (buf []byte, hash utils.HashType, err error) {
 	ctx, cancel := context.WithTimeout(ctx, h.timeout)
@@ -142,8 +153,17 @@ func (h *HTTPVehicle) Read(ctx context.Context, oldHash utils.HashType) (buf []b
 	}
 	defer resp.Body.Close()
 
+	if err = ctx.Err(); err != nil {
+		return
+	}
+	if h.inReadOwned != nil {
+		h.inReadOwned(ctx, resp)
+	}
 	if h.inRead != nil {
 		h.inRead(resp)
+	}
+	if err = ctx.Err(); err != nil {
+		return
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
@@ -163,7 +183,7 @@ func (h *HTTPVehicle) Read(ctx context.Context, oldHash utils.HashType) (buf []b
 	}
 	hash = utils.MakeHash(buf)
 	if etag {
-		cachefile.Cache().SetETagWithHash(h.url, cachefile.EtagWithHash{
+		_ = cachefile.Cache().SetETagWithHashOwned(ctx, h.url, cachefile.EtagWithHash{
 			Hash: hash,
 			ETag: resp.Header.Get("ETag"),
 			Time: time.Now(),

@@ -2,11 +2,12 @@ package provider
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"os"
-	"path/filepath"
 
+	"github.com/metacubex/mihomo/component/resource"
 	P "github.com/metacubex/mihomo/constant/provider"
 	"github.com/metacubex/mihomo/log"
 )
@@ -52,6 +53,10 @@ func loadFromSidecarBytes(buf, source []byte, behavior P.RuleBehavior) (ruleStra
 // writeSidecar binds the bitmap to parser input, NOT the possibly older raw file.
 // Failure is a cache miss, never permission to drop rules or ignore a load error.
 func writeSidecar(vehiclePath string, source []byte, behavior P.RuleBehavior, strategy ruleStrategy) {
+	writeSidecarOwned(nil, vehiclePath, source, behavior, strategy)
+}
+
+func writeSidecarOwned(owner *resource.Owner, vehiclePath string, source []byte, behavior P.RuleBehavior, strategy ruleStrategy) {
 	mrsStrategy, ok := strategy.(mrsRuleStrategy)
 	if !ok || strategy.Count() < sidecarMinRules {
 		return
@@ -69,22 +74,19 @@ func writeSidecar(vehiclePath string, source []byte, behavior P.RuleBehavior, st
 	envelope.Write(payloadHash[:])
 	envelope.Write(payload.Bytes())
 	path := sidecarPath(vehiclePath)
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	ctx := context.Background()
+	if owner != nil {
+		ctx = owner.Context()
+	}
+	prepared, err := P.PrepareFileWrite(ctx, path, envelope.Bytes())
 	if err != nil {
-		log.Warnln("[Provider] create mrs sidecar %s: %v", path, err)
 		return
 	}
-	defer os.Remove(tmp.Name())
-	_, err = tmp.Write(envelope.Bytes())
-	if err == nil {
-		err = tmp.Sync()
-	}
-	closeErr := tmp.Close()
-	if err == nil {
-		err = closeErr
-	}
-	if err == nil {
-		err = os.Rename(tmp.Name(), path)
+	defer prepared.Abort()
+	if owner != nil {
+		err = owner.Publish(prepared)
+	} else {
+		err = prepared.Publish()
 	}
 	if err != nil {
 		log.Warnln("[Provider] publish mrs sidecar %s: %v", path, err)

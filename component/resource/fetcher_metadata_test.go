@@ -18,6 +18,9 @@ func (v snapshotVehicle) Path() string         { return v.path }
 func (v snapshotVehicle) Url() string          { return "test://metadata" }
 func (v snapshotVehicle) Proxy() string        { return "" }
 func (v snapshotVehicle) Write(b []byte) error { return os.WriteFile(v.path, b, 0600) }
+func (v snapshotVehicle) PrepareWrite(ctx context.Context, b []byte) (*P.PreparedWrite, error) {
+	return P.PrepareFileWrite(ctx, v.path, b)
+}
 func (v snapshotVehicle) Read(_ context.Context, hash utils.HashType) ([]byte, utils.HashType, error) {
 	b := []byte("read-snapshot")
 	return b, utils.MakeHash(b), nil

@@ -1,0 +1,3 @@
+$ go vet ./component/resource ./adapter/provider ./rules/provider ./tunnel ./common/utils ./component/profile/cachefile
+
+exit=0

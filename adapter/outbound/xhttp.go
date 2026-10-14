@@ -21,6 +21,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
+	"syscall"
+
+	"github.com/metacubex/mihomo/component/resolver"
+	"github.com/metacubex/mihomo/log"
 	"regexp"
 	"strconv"
 	"strings"
@@ -199,6 +204,9 @@ func (h *XHttp) lazyInit(ctx context.Context) error {
 
 	best, ss, err := h.initialize(ctx)
 	h.initMu.Lock()
+	if err == nil && ctx.Err() != nil {
+		err = blackstoneStageError("node-selection", ctx.Err())
+	}
 	if err == nil {
 		h.bestCfg, h.ssOutbound = best, ss
 		h.isInit, h.lastFetch = true, time.Now()
@@ -207,6 +215,12 @@ func (h *XHttp) lazyInit(ctx context.Context) error {
 	h.initFlight = nil
 	close(flight.done)
 	h.initMu.Unlock()
+	if err != nil {
+		if ss != nil {
+			_ = ss.Close()
+		}
+		blackstoneReportFailure(err)
+	}
 	return err
 }
 
@@ -245,12 +259,12 @@ func (h *XHttp) initialize(ctx context.Context) (xhttpRealConfig, C.ProxyAdapter
 	}
 
 	if len(matchedConfigs) == 0 {
-		return xhttpRealConfig{}, nil, errors.New("no target node matched")
+		return xhttpRealConfig{}, nil, blackstoneStageError("node-selection", errors.New("no target node matched"))
 	}
 
 	best, err := h.pingRace(apiCtx, matchedConfigs)
 	if err != nil {
-		return xhttpRealConfig{}, nil, err
+		return xhttpRealConfig{}, nil, blackstoneStageError("node-selection", err)
 	}
 
 	var ss C.ProxyAdapter
@@ -492,7 +506,194 @@ var blackstoneAPIClient = func(dialer C.Dialer) *http.Client {
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
-func (h *XHttp) fetchDynamicConfig(ctx context.Context, nodeID, token string) ([]xhttpRealConfig, error) {
+// blackstoneFailure hides the original transport/parser text while preserving its
+// error chain. Never serialize cause: url.Error, x509 and YAML errors contain private data.
+type blackstoneFailure struct {
+	stage, last, causeClass string
+	status                  int
+	business                string
+	cause                   error
+}
+
+func (e *blackstoneFailure) Error() string {
+	return fmt.Sprintf("blackstone control stage=%s last=%s cause=%s http=%d business=%s message=redacted", e.stage, e.last, e.causeClass, e.status, e.business)
+}
+func (e *blackstoneFailure) Unwrap() error { return e.cause }
+func blackstoneCause(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "cancellation"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline"
+	}
+	var cert *tls.CertificateVerificationError
+	if errors.As(err, &cert) {
+		return "certificate"
+	}
+	var timeout net.Error
+	if errors.As(err, &timeout) && timeout.Timeout() {
+		return "deadline"
+	}
+	// Windows WSAECONNRESET (10054) is not always mapped to syscall.ECONNRESET.
+	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.Errno(10054)) {
+		return "reset"
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return "eof"
+	}
+	return "unclassified"
+}
+func blackstoneNumericCode(response map[string]any) string {
+	var text string
+	switch v := response["code"].(type) {
+	case float64:
+		text = strconv.FormatFloat(v, 'f', -1, 64)
+	case string:
+		text = v
+	}
+	if n, err := strconv.ParseInt(text, 10, 64); err == nil {
+		return strconv.FormatInt(n, 10)
+	}
+	return "unknown"
+}
+func blackstoneStageError(stage string, err error) error {
+	return &blackstoneFailure{stage: stage, last: "none", causeClass: blackstoneCause(err), business: "unknown", cause: err}
+}
+
+// One trace per control fetch; no target, headers, response text or per-packet logs.
+// Callbacks may run on different goroutines and are composed with caller traces.
+type blackstoneControlTrace struct {
+	mu          sync.Mutex
+	stage, last string
+}
+
+func (s *blackstoneControlTrace) set(stage, last string) {
+	s.mu.Lock()
+	// HTTP callbacks can arrive after Do returns (especially an early response
+	// while its writer is still running). Keep the furthest observed milestone.
+	if blackstoneTraceRank(last) >= blackstoneTraceRank(s.last) {
+		s.stage, s.last = stage, last
+	}
+	s.mu.Unlock()
+}
+func blackstoneTraceRank(last string) int {
+	switch last {
+	case "dns_start":
+		return 1
+	case "dns_done", "dns_failed":
+		return 2
+	case "connect_start":
+		return 3
+	case "connect_done", "connect_failed":
+		return 4
+	case "tls_start":
+		return 5
+	case "tls_verified", "tls_failed":
+		return 6
+	case "connection_ready":
+		return 7
+	case "request_written", "request_write_failed":
+		return 8
+	case "first_response_byte":
+		return 9
+	case "response_headers":
+		return 10
+	case "response_read":
+		return 11
+	default:
+		return 0
+	}
+}
+func (s *blackstoneControlTrace) trace() *httptrace.ClientTrace {
+	return &httptrace.ClientTrace{
+		DNSStart: func(httptrace.DNSStartInfo) { s.set("dns", "dns_start") },
+		DNSDone: func(i httptrace.DNSDoneInfo) {
+			if i.Err != nil {
+				s.set("dns", "dns_failed")
+			} else {
+				s.set("connect", "dns_done")
+			}
+		},
+		ConnectStart: func(string, string) { s.set("connect", "connect_start") },
+		ConnectDone: func(_, _ string, err error) {
+			if err != nil {
+				s.set("connect", "connect_failed")
+			} else {
+				s.set("tls", "connect_done")
+			}
+		},
+		TLSHandshakeStart: func() { s.set("tls", "tls_start") },
+		TLSHandshakeDone: func(_ tls.ConnectionState, err error) {
+			if err != nil {
+				s.set("tls", "tls_failed")
+			} else {
+				s.set("write", "tls_verified")
+			}
+		},
+		GotConn: func(httptrace.GotConnInfo) { s.set("write", "connection_ready") },
+		WroteRequest: func(i httptrace.WroteRequestInfo) {
+			if i.Err != nil {
+				s.set("write", "request_write_failed")
+			} else {
+				s.set("response", "request_written")
+			}
+		},
+		GotFirstResponseByte: func() { s.set("response", "first_response_byte") },
+	}
+}
+
+// Process-wide frequency cap avoids DNS/health checks across multiple adapters
+// becoming unbounded diagnostics. Returned errors remain safe even when suppressed.
+var blackstoneDiagnosticGate struct {
+	sync.Mutex
+	last time.Time
+}
+
+func blackstoneDiagnosticAllowed(now time.Time) bool {
+	blackstoneDiagnosticGate.Lock()
+	defer blackstoneDiagnosticGate.Unlock()
+	if !blackstoneDiagnosticGate.last.IsZero() && now.Sub(blackstoneDiagnosticGate.last) < time.Minute {
+		return false
+	}
+	blackstoneDiagnosticGate.last = now
+	return true
+}
+func blackstoneReportFailure(err error) {
+	var safe *blackstoneFailure
+	if errors.As(err, &safe) && blackstoneDiagnosticAllowed(time.Now()) {
+		log.Warnln("%s", safe.Error())
+	}
+}
+
+func (h *XHttp) fetchDynamicConfig(ctx context.Context, nodeID, token string) (configs []xhttpRealConfig, resultErr error) {
+	trace := &blackstoneControlTrace{stage: "connect", last: "none"}
+	status, business := 0, "unknown"
+	defer func() {
+		if resultErr == nil {
+			return
+		}
+		trace.mu.Lock()
+		stage, last := trace.stage, trace.last
+		trace.mu.Unlock()
+		var safe *blackstoneFailure
+		if errors.As(resultErr, &safe) {
+			stage = safe.stage
+			if safe.business != "unknown" {
+				business = safe.business
+			}
+		}
+		var op *net.OpError
+		if errors.As(resultErr, &op) && op.Op == "write" && blackstoneTraceRank(last) < blackstoneTraceRank("response_headers") {
+			// WroteRequest can precede a buffered TLS socket flush failure.
+			stage = "write"
+		}
+		var dns *net.DNSError
+		if errors.As(resultErr, &dns) || errors.Is(resultErr, resolver.ErrIPNotFound) || errors.Is(resultErr, resolver.ErrIPVersion) || errors.Is(resultErr, resolver.ErrIPv6Disabled) {
+			stage = "dns"
+		}
+		resultErr = fmt.Errorf("%w", &blackstoneFailure{stage: stage, last: last, causeClass: blackstoneCause(resultErr), status: status, business: business, cause: resultErr})
+	}()
+	ctx = httptrace.WithClientTrace(ctx, trace.trace())
 	url := fmt.Sprintf("https://%s/api/v3/proxy/config", xhttpAPIIP)
 	deviceContext := h.option != nil && h.option.DeviceID != "" && h.option.DeviceName != ""
 	if deviceContext {
@@ -528,9 +729,8 @@ func (h *XHttp) fetchDynamicConfig(ctx context.Context, nodeID, token string) ([
 	}
 
 	client := blackstoneAPIClient(h.dialer)
-	if !deviceContext {
-		client = &http.Client{Transport: xhttpAPITransport(h.dialer)}
-	}
+	// Both canonical and legacy requests carry private x-header material.
+	// Never replay it to a redirected origin; share the bounded client policy.
 
 	// The client/transport is scoped to this fetch, not shared by later retries.
 	defer client.CloseIdleConnections()
@@ -538,29 +738,51 @@ func (h *XHttp) fetchDynamicConfig(ctx context.Context, nodeID, token string) ([
 	if err != nil {
 		return nil, fmt.Errorf("api request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	status = resp.StatusCode
+	trace.set("read", "response_headers")
+	// Close exactly once and preserve a close failure when no earlier failure exists.
+	defer func() {
+		if err := resp.Body.Close(); err != nil && resultErr == nil {
+			resultErr = blackstoneStageError("read", err)
+		}
+	}()
 
 	bodyBytes, err := readLimited(resp.Body, xhttpMaxAPIResponseBytes)
 	if err != nil {
 		return nil, fmt.Errorf("read api response: %w", err)
 	}
+	trace.set("response", "response_read")
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("api returned status: %d", resp.StatusCode)
+		var admission map[string]any
+		_ = json.Unmarshal(bodyBytes, &admission)
+		return nil, blackstoneAdmissionError(status, admission, "response")
 	}
 
+	trace.set("parse", "response_read")
 	var jsonResp map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &jsonResp); err != nil {
 		encryptedB64 := strings.Trim(string(bodyBytes), "\"'\n\r	 ")
 		return h.processApiData(encryptedB64)
 	}
+	business = blackstoneNumericCode(jsonResp)
 	encryptedB64, ok := jsonResp["data"].(string)
 	if !ok || encryptedB64 == "" {
-		return nil, blackstoneAdmissionError(resp.StatusCode, jsonResp, "api data field must be a non-empty string")
+		return nil, blackstoneAdmissionError(resp.StatusCode, jsonResp, "response")
 	}
 	return h.processApiData(encryptedB64)
 }
 
-func (h *XHttp) processApiData(encryptedB64 string) ([]xhttpRealConfig, error) {
+func (h *XHttp) processApiData(encryptedB64 string) (configs []xhttpRealConfig, resultErr error) {
+	stage := "decrypt"
+	defer func() {
+		if resultErr == nil {
+			return
+		}
+		var safe *blackstoneFailure
+		if !errors.As(resultErr, &safe) {
+			resultErr = blackstoneStageError(stage, resultErr)
+		}
+	}()
 	if pad := len(encryptedB64) % 4; pad != 0 {
 		encryptedB64 += strings.Repeat("=", 4-pad)
 	}
@@ -579,6 +801,7 @@ func (h *XHttp) processApiData(encryptedB64 string) ([]xhttpRealConfig, error) {
 		}
 	}
 
+	stage = "parse"
 	var layer1 struct {
 		Data map[string]interface{} `json:"data"`
 	}
@@ -588,13 +811,14 @@ func (h *XHttp) processApiData(encryptedB64 string) ([]xhttpRealConfig, error) {
 	if layer1.Data == nil {
 		var admission map[string]any
 		_ = json.Unmarshal(rawB64, &admission)
-		return nil, blackstoneAdmissionError(http.StatusOK, admission, "decrypted data field is missing")
+		return nil, blackstoneAdmissionError(http.StatusOK, admission, "response")
 	}
 	smartB64, ok := layer1.Data["smart"].(string)
 	if !ok || smartB64 == "" {
 		return nil, errors.New("smart field must be a non-empty string")
 	}
 
+	stage = "decrypt"
 	smartRaw, err := base64.StdEncoding.DecodeString(smartB64)
 	if err != nil {
 		return nil, fmt.Errorf("decode smart payload: %w", err)
@@ -604,6 +828,7 @@ func (h *XHttp) processApiData(encryptedB64 string) ([]xhttpRealConfig, error) {
 		return nil, err
 	}
 
+	stage = "parse"
 	var smartData struct {
 		Proxies []map[string]interface{} `yaml:"proxies"`
 	}
@@ -660,7 +885,7 @@ func (h *XHttp) processApiData(encryptedB64 string) ([]xhttpRealConfig, error) {
 	}
 
 	if len(realConfigs) == 0 {
-		return nil, errors.New("api returned no valid nodes")
+		return nil, blackstoneStageError("node-selection", errors.New("api returned no valid nodes"))
 	}
 
 	return realConfigs, nil

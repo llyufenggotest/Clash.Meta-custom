@@ -28,7 +28,7 @@ func TestBlackstoneChunkRangesRejectedBeforeIteration(t *testing.T) {
 			h, _ := NewXHttp(XHttpOption{DeviceID: "synthetic", DeviceName: "synthetic"})
 			fixtureBlackstoneClient(t, func(*http.Request) (*http.Response, error) { return blackstoneResponse(envelope), nil })
 			_, err := h.fetchDynamicConfig(context.Background(), "synthetic", "synthetic")
-			if err == nil || !strings.Contains(err.Error(), "chunk range") {
+			if err == nil || !strings.Contains(blackstoneTestUnderlyingText(err), "chunk range") {
 				t.Fatalf("invalid range not rejected at chunk boundary: %v", err)
 			}
 		})
@@ -49,6 +49,38 @@ func blackstoneResponse(body string) *http.Response {
 	return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
 }
 
+func TestBlackstoneValidChunkBoundaryWirePreserved(t *testing.T) {
+	h, _ := NewXHttp(XHttpOption{})
+	// Same legacy cipher construction, with an unused empty range [len,len].
+	outerB64 := fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
+	outer, _ := base64.StdEncoding.DecodeString(outerB64)
+	for i := range outer {
+		outer[i] ^= xhttpPrivKey[i%len(xhttpPrivKey)]
+	}
+	var obj map[string]any
+	_ = json.Unmarshal(outer, &obj)
+	data := obj["data"].(map[string]any)
+	raw, _ := base64.StdEncoding.DecodeString(data["smart"].(string))
+	payloadLen := uint32(len(raw) - 9)
+	expanded := make([]byte, 17)
+	expanded[0] = 2
+	copy(expanded[1:9], raw[1:9])
+	binary.BigEndian.PutUint32(expanded[9:13], payloadLen)
+	binary.BigEndian.PutUint32(expanded[13:17], payloadLen)
+	expanded = append(expanded, raw[9:]...)
+	for _, payload := range [][]byte{raw, expanded} {
+		data["smart"] = base64.StdEncoding.EncodeToString(payload)
+		b, _ := json.Marshal(obj)
+		for i := range b {
+			b[i] ^= xhttpPrivKey[i%len(xhttpPrivKey)]
+		}
+		configs, err := h.processApiData(base64.StdEncoding.EncodeToString(b))
+		if err != nil || len(configs) != 1 || configs[0].Server != "127.0.0.1" || configs[0].Port != "443" {
+			t.Fatal("valid inclusive bounds changed cipher wire")
+		}
+	}
+}
+
 func TestBlackstoneResponseBodyLimits(t *testing.T) {
 	for _, size := range []int{xhttpMaxAPIResponseBytes, xhttpMaxAPIResponseBytes + 1} {
 		h, _ := NewXHttp(XHttpOption{DeviceID: "synthetic", DeviceName: "synthetic"})
@@ -59,7 +91,7 @@ func TestBlackstoneResponseBodyLimits(t *testing.T) {
 		if err == nil {
 			t.Fatal("missing envelope accepted")
 		}
-		if strings.Contains(err.Error(), "exceeds") != (size > xhttpMaxAPIResponseBytes) {
+		if strings.Contains(blackstoneTestUnderlyingText(err), "exceeds") != (size > xhttpMaxAPIResponseBytes) {
 			t.Fatal("incorrect HTTP body limit boundary")
 		}
 	}

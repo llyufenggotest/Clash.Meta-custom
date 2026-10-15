@@ -55,7 +55,7 @@ func TestXHTTPURLTestConcurrentDataDialIsolation(t *testing.T) {
 	h.addr = ln.Addr().String()
 	h.isInit = true
 	h.lastFetch = time.Now()
-	h.bestCfg = xhttpRealConfig{Server: host, Port: port}
+	h.bestCfg = xhttpRealConfig{Server: host, Port: port, Password: "synthetic:00"}
 	wrapper := h
 	const count = 32
 	var wg sync.WaitGroup
@@ -69,7 +69,7 @@ func TestXHTTPURLTestConcurrentDataDialIsolation(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			if _, e := h.DialContext(context.Background(), &C.Metadata{}); !errors.Is(e, errProbeData) {
+			if _, e := h.DialContext(context.Background(), &C.Metadata{DstIP: netip.MustParseAddr("192.0.2.1"), DstPort: 443}); !errors.Is(e, errProbeData) {
 				t.Errorf("data dial: %v", e)
 			}
 		}()

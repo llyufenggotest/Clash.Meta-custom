@@ -4,11 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/hmac"
-	"crypto/md5"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
@@ -35,6 +31,8 @@ import (
 
 	"github.com/metacubex/mihomo/common/utils"
 	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/transport/blackstone"
+	M "github.com/metacubex/sing/common/metadata"
 	"go.yaml.in/yaml/v3"
 	"golang.org/x/crypto/chacha20poly1305"
 )
@@ -54,14 +52,23 @@ const (
 )
 
 type xhttpRealConfig struct {
-	Name     string
-	Type     string
-	Server   string
-	Port     string
-	Password string
-	Cipher   string
-	TcpFake  string
+	Name              string
+	Type              string
+	Server            string
+	Port              string
+	Password          string
+	Cipher            string
+	TcpFake           string
+	UdpFake           string
+	UDP               bool
+	UDPOverTCP        bool
+	UDPOverTCPVersion int
+	PaddingLen        string
 }
+
+// XHttpConn retains the existing instrumentation type name; wire ownership lives
+// exclusively in transport/blackstone, not standard transport/xhttp.
+type XHttpConn = blackstone.Conn
 
 type XHttpOption struct {
 	BasicOption
@@ -84,6 +91,7 @@ type XHttp struct {
 	bestCfg    xhttpRealConfig
 	lastFetch  time.Time
 	ssOutbound C.ProxyAdapter
+	transport  *blackstone.Client
 
 	// Only URLTest bypasses dialer-proxy and API dialer overrides. Control,
 	// ping-race and data traffic retain the original Base.dialer.
@@ -304,6 +312,7 @@ func (h *XHttp) runInitFlight(flight *xhttpInitFlight) {
 	if h.initFlight == flight {
 		if err == nil {
 			h.bestCfg, h.ssOutbound = best, ss
+			h.transport = nil
 			h.isInit, h.lastFetch = true, time.Now()
 		}
 		h.initErr = err
@@ -394,178 +403,131 @@ func (h *XHttp) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, 
 	if err := h.lazyInit(ctx); err != nil {
 		return nil, err
 	}
-
-	h.initMu.Lock()
-	best, ss := h.bestCfg, h.ssOutbound
-	h.initMu.Unlock()
-	if ss != nil {
-		return ss.DialContext(ctx, metadata)
-	}
-
-	addr := net.JoinHostPort(best.Server, best.Port)
-	rawConn, err := h.dialer.DialContext(ctx, "tcp", addr)
+	best, ss, client, err := h.transportSnapshot()
 	if err != nil {
 		return nil, err
 	}
+	if ss != nil {
+		return ss.DialContext(ctx, metadata)
+	}
+	conn, err := h.dialStream(ctx, best, client, M.ParseSocksaddr(metadata.RemoteAddress()))
+	if err != nil {
+		return nil, err
+	}
+	return NewConn(conn, h), nil
+}
 
+// Snapshot cfg, fallback and generation-local cache under the same mutex.
+// A late old-generation dial must never replace the refreshed generation.
+func (h *XHttp) transportSnapshot() (xhttpRealConfig, C.ProxyAdapter, *blackstone.Client, error) {
+	h.initMu.Lock()
+	defer h.initMu.Unlock()
+	if h.ssOutbound != nil {
+		return h.bestCfg, h.ssOutbound, nil, nil
+	}
+	if h.transport == nil {
+		c, err := blackstone.New(blackstone.Config{Password: h.bestCfg.Password, Cipher: h.bestCfg.Cipher, TCPFake: h.bestCfg.TcpFake, UDPFake: h.bestCfg.UdpFake})
+		if err != nil {
+			return h.bestCfg, nil, nil, err
+		}
+		h.transport = c
+	}
+	return h.bestCfg, nil, h.transport, nil
+}
+
+// TCP and UOT share exactly this stream initialization and original data dialer.
+func (h *XHttp) dialStream(ctx context.Context, best xhttpRealConfig, client *blackstone.Client, dest M.Socksaddr) (net.Conn, error) {
+	var destination bytes.Buffer
+	if dest.IsFqdn() {
+		if len(dest.Fqdn) > 255 {
+			return nil, errors.New("blackstone: domain too long")
+		}
+	} else if !dest.Addr.IsValid() {
+		return nil, errors.New("blackstone: invalid destination")
+	}
+	if err := M.SocksaddrSerializer.WriteAddrPort(&destination, dest); err != nil {
+		return nil, err
+	}
+	rawConn, err := h.dialer.DialContext(ctx, "tcp", net.JoinHostPort(best.Server, best.Port))
+	if err != nil {
+		return nil, err
+	}
 	if tcpConn, ok := rawConn.(*net.TCPConn); ok {
-		tcpConn.SetNoDelay(true)
+		_ = tcpConn.SetNoDelay(true)
 	}
-
-	passParts := strings.Split(best.Password, ":")
-	if len(passParts) != 2 {
-		rawConn.Close()
-		return nil, errors.New("invalid xhttp password format")
+	xconn := client.StreamConn(rawConn, destination.Bytes())
+	stop := context.AfterFunc(ctx, func() { _ = rawConn.Close() })
+	deadline := time.Now().Add(10 * time.Second)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
 	}
-	part1Str := strings.TrimSpace(passParts[0])
-	part2Hex := passParts[1]
-	decodedHmacKey, _ := hex.DecodeString(part2Hex)
-	hmacLen := len(decodedHmacKey)
-	handshakeLen := 128 + 16 + hmacLen + 1 + 16
-	ivLenOffset := 144 + hmacLen
-
-	clientHandshake := make([]byte, handshakeLen)
-	decodedTcp, _ := hex.DecodeString(best.TcpFake)
-
-	copyLen := len(decodedTcp)
-	if copyLen > 128 {
-		copyLen = 128
+	_ = rawConn.SetWriteDeadline(deadline)
+	_, err = xconn.Write(nil)
+	stopped := stop()
+	if err != nil || !stopped || ctx.Err() != nil {
+		_ = rawConn.Close()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if err == nil {
+			err = context.Canceled
+		}
+		return nil, err
 	}
-	copy(clientHandshake[0:copyLen], decodedTcp[:copyLen])
-	if copyLen < 128 {
-		_, _ = rand.Read(clientHandshake[copyLen:128])
-	}
-
-	tokenMD5 := md5.Sum([]byte(part1Str + "do not hack this protocol please"))
-	copy(clientHandshake[128:144], tokenMD5[:])
-	copy(clientHandshake[144:144+hmacLen], decodedHmacKey)
-
-	clientHandshake[ivLenOffset] = 0x10
-	clientWriteIV := clientHandshake[ivLenOffset+1 : handshakeLen]
-	_, _ = rand.Read(clientWriteIV)
-
-	aesKey := md5.Sum([]byte(part1Str))
-	block, _ := aes.NewCipher(aesKey[:])
-	encryptStream := cipher.NewCTR(block, clientWriteIV)
-
-	var destBuf bytes.Buffer
-	switch metadata.AddrType() {
-	case C.AtypDomainName:
-		destBuf.WriteByte(0x03)
-		destBuf.WriteByte(byte(len(metadata.RuleHost())))
-		destBuf.WriteString(metadata.RuleHost())
-	case C.AtypIPv4:
-		destBuf.WriteByte(0x01)
-		destBuf.Write(metadata.DstIP.AsSlice())
-	default:
-		destBuf.WriteByte(0x04)
-		destBuf.Write(metadata.DstIP.AsSlice())
-	}
-	binary.Write(&destBuf, binary.BigEndian, metadata.DstPort)
-
-	addrPayload := destBuf.Bytes()
-	encryptedAddr := make([]byte, len(addrPayload))
-	encryptStream.XORKeyStream(encryptedAddr, addrPayload)
-
-	firstPayload := append(clientHandshake, encryptedAddr...)
-
-	rawConn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	if _, err := rawConn.Write(firstPayload); err != nil {
-		rawConn.Close()
-		return nil, fmt.Errorf("write payload failed: %v", err)
-	}
-	rawConn.SetWriteDeadline(time.Time{})
-
-	xconn := &XHttpConn{
-		Conn:          rawConn,
-		encryptStream: encryptStream,
-		block:         block,
-		ivLenOffset:   ivLenOffset,
-		handshakeDone: false,
-	}
-
-	return NewConn(xconn, h), nil
+	_ = rawConn.SetWriteDeadline(time.Time{})
+	return xconn, nil
 }
 
 func (h *XHttp) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (C.PacketConn, error) {
 	if err := h.lazyInit(ctx); err != nil {
 		return nil, err
 	}
-	h.initMu.Lock()
-	ss := h.ssOutbound
-	h.initMu.Unlock()
+	best, ss, client, err := h.transportSnapshot()
+	if err != nil {
+		return nil, err
+	}
 	if ss != nil {
 		return ss.ListenPacketContext(ctx, metadata)
 	}
-	return nil, C.ErrNotSupport
-}
-
-func (h *XHttp) SupportUOT() bool { return false }
-func (h *XHttp) Close() error     { return nil }
-
-// ========================
-// 延迟读取防死锁
-// ========================
-type XHttpConn struct {
-	net.Conn
-	encryptStream cipher.Stream
-	decryptStream cipher.Stream
-	block         cipher.Block
-	ivLenOffset   int
-	handshakeDone bool
-	readMu        sync.Mutex
-	writeMu       sync.Mutex
-}
-
-func (c *XHttpConn) Write(b []byte) (n int, err error) {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	buf := make([]byte, len(b))
-	c.encryptStream.XORKeyStream(buf, b)
-	return c.Conn.Write(buf)
-}
-
-func (c *XHttpConn) Read(b []byte) (n int, err error) {
-	c.readMu.Lock()
-	defer c.readMu.Unlock()
-	if !c.handshakeDone {
-		c.Conn.SetReadDeadline(time.Now().Add(15 * time.Second))
-		baseHeader := make([]byte, c.ivLenOffset)
-		if _, err := io.ReadFull(c.Conn, baseHeader); err != nil {
-			return 0, err
-		}
-
-		markerBuf := make([]byte, 1)
-		var shift int
-		for {
-			if _, err := io.ReadFull(c.Conn, markerBuf); err != nil {
-				return 0, err
-			}
-			if markerBuf[0] == 0x10 {
-				break
-			}
-			shift++
-			if shift > 10 {
-				return 0, errors.New("IV offset padding too large")
-			}
-		}
-
-		serverReadIV := make([]byte, 16)
-		if _, err := io.ReadFull(c.Conn, serverReadIV); err != nil {
-			return 0, err
-		}
-		c.Conn.SetReadDeadline(time.Time{})
-
-		c.decryptStream = cipher.NewCTR(c.block, serverReadIV)
-		c.handshakeDone = true
+	if !best.UDP {
+		return nil, C.ErrNotSupport
 	}
-
-	n, err = c.Conn.Read(b)
-	if n > 0 {
-		c.decryptStream.XORKeyStream(b[:n], b[:n])
+	if best.UDPOverTCP {
+		destination, err := blackstone.UOTDestination(best.UDPOverTCPVersion)
+		if err != nil {
+			return nil, err
+		}
+		conn, err := h.dialStream(ctx, best, client, destination)
+		if err != nil {
+			return nil, err
+		}
+		packet, err := blackstone.NewUOT(conn, best.UDPOverTCPVersion, M.ParseSocksaddr(metadata.RemoteAddress()))
+		if err != nil {
+			conn.Close()
+			return nil, err
+		}
+		return NewPacketConn(packet, h), nil
 	}
-	return n, err
+	remote, err := resolveUDPAddr(ctx, "udp", net.JoinHostPort(best.Server, best.Port), h.prefer)
+	if err != nil {
+		return nil, err
+	}
+	pc, err := h.dialer.ListenPacket(ctx, "udp", "", remote.AddrPort())
+	if err != nil {
+		return nil, err
+	}
+	return NewPacketConn(client.PacketConn(pc, remote), h), nil
 }
+
+func (h *XHttp) SupportUOT() bool {
+	h.initMu.Lock()
+	defer h.initMu.Unlock()
+	if h.ssOutbound != nil {
+		return h.ssOutbound.SupportUOT()
+	}
+	return h.isInit && h.bestCfg.UDP && h.bestCfg.UDPOverTCP
+}
+func (h *XHttp) Close() error { return nil }
 
 // ========================
 // API 请求解析核心 (+ 修复 <nil> cipher BUG)
@@ -1137,16 +1099,11 @@ func (h *XHttp) processApiData(encryptedB64 string) (configs []xhttpRealConfig, 
 					realConfigs = append(realConfigs, realCfg)
 				}
 			} else {
-				cfg := xhttpRealConfig{
-					Name:     pName,
-					Type:     "xhttp",
-					Server:   fmt.Sprintf("%v", proxy["server"]),
-					Port:     fmt.Sprintf("%v", proxy["port"]),
-					Password: fmt.Sprintf("%v", proxy["password"]),
+				cfg, err := parseBlackstoneConfig(proxy)
+				if err != nil {
+					return nil, err
 				}
-				if fakeNet, ok := proxy["fake-net"].(map[string]interface{}); ok {
-					cfg.TcpFake, _ = fakeNet["tcp"].(string)
-				}
+				cfg.Name = pName
 				realConfigs = append(realConfigs, cfg)
 			}
 		}
@@ -1157,6 +1114,41 @@ func (h *XHttp) processApiData(encryptedB64 string) (configs []xhttpRealConfig, 
 	}
 
 	return realConfigs, nil
+}
+
+// Only certificate inner fields drive Blackstone wire; outer TLS/network options
+// can coexist in official configs but do not select standard VLESS XHTTP here.
+func parseBlackstoneConfig(data map[string]interface{}) (xhttpRealConfig, error) {
+	var wire struct {
+		Server            string            `json:"server"`
+		Port              json.Number       `json:"port"`
+		Password          string            `json:"password"`
+		Cipher            string            `json:"cipher"`
+		UDP               *bool             `json:"udp"`
+		UDPOverTCP        bool              `json:"udp-over-tcp"`
+		UDPOverTCPVersion int               `json:"udp-over-tcp-version"`
+		PaddingLen        string            `json:"padding-len"`
+		FakeNet           map[string]string `json:"fake-net"`
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return xhttpRealConfig{}, errors.New("blackstone: invalid config")
+	}
+	if err = json.Unmarshal(raw, &wire); err != nil {
+		return xhttpRealConfig{}, errors.New("blackstone: invalid transport fields")
+	}
+	port, err := strconv.Atoi(string(wire.Port))
+	if err != nil || port < 1 || port > 65535 || wire.Server == "" || wire.Password == "" {
+		return xhttpRealConfig{}, errors.New("blackstone: missing required transport fields")
+	}
+	if wire.UDPOverTCPVersion < 0 || wire.UDPOverTCPVersion > 2 {
+		return xhttpRealConfig{}, errors.New("blackstone: unsupported UOT version")
+	}
+	udp := true // Legacy adapter had no explicit inner UDP field; preserve that contract.
+	if wire.UDP != nil {
+		udp = *wire.UDP
+	}
+	return xhttpRealConfig{Type: "xhttp", Server: wire.Server, Port: strconv.Itoa(port), Password: wire.Password, Cipher: wire.Cipher, TcpFake: wire.FakeNet["tcp"], UdpFake: wire.FakeNet["udp"], UDP: udp, UDPOverTCP: wire.UDPOverTCP, UDPOverTCPVersion: wire.UDPOverTCPVersion, PaddingLen: wire.PaddingLen}, nil
 }
 
 func (h *XHttp) crackCertificate(certPem string) (xhttpRealConfig, error) {
@@ -1180,16 +1172,7 @@ func (h *XHttp) crackCertificate(certPem string) (xhttpRealConfig, error) {
 		if err == nil {
 			var innerData map[string]interface{}
 			if json.Unmarshal(plain, &innerData) == nil {
-				cfg := xhttpRealConfig{
-					Type:     "xhttp",
-					Server:   fmt.Sprintf("%v", innerData["server"]),
-					Port:     fmt.Sprintf("%v", innerData["port"]),
-					Password: fmt.Sprintf("%v", innerData["password"]),
-				}
-				if fakeNet, ok := innerData["fake-net"].(map[string]interface{}); ok {
-					cfg.TcpFake, _ = fakeNet["tcp"].(string)
-				}
-				return cfg, nil
+				return parseBlackstoneConfig(innerData)
 			}
 		}
 	}

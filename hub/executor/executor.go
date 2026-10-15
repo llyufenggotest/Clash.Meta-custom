@@ -587,6 +587,9 @@ func updateIPTables(cfg *config.Config) {
 }
 
 func Shutdown() {
+	// Proxies are released with the config; core HTTP must not route into an
+	// empty tunnel afterwards. initInnerTcp reinstalls it on the next apply.
+	inner.New(nil)
 	listener.Cleanup()
 	tproxy.CleanupTProxyIPTables()
 	resolver.StoreFakePoolState()

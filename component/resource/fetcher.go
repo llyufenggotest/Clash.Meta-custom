@@ -167,6 +167,80 @@ func (f *Fetcher[V]) Initial() (V, error) {
 	return contents, nil
 }
 
+// InitialFetch is network content acquired ahead of Initial. It has not been
+// parsed or published as provider state. HTTP vehicles may update ETag/cache
+// metadata during Read, using the Fetcher's publication owner.
+type InitialFetch struct {
+	data *initialFetchData
+}
+
+// A token is owner-bound and single-use even when copied. Consuming it drops
+// the retained raw buffer before the preflight window can admit another read.
+type initialFetchData struct {
+	mu       sync.Mutex
+	owner    *Owner
+	buf      []byte
+	hash     utils.HashType
+	consumed bool
+}
+
+// FetchInitial performs only the remote acquisition that Initial would do when
+// neither a local file nor a bundle file can satisfy it. It never parses,
+// writes, publishes, or starts a pull loop, so callers may run it concurrently
+// across different Fetchers and keep InitialFromFetch (the parse) sequential.
+func (f *Fetcher[V]) FetchInitial() (InitialFetch, error) {
+	if err := f.owner.admit(); err != nil {
+		return InitialFetch{}, err
+	}
+	if f.vehicle.Type() != P.HTTP || f.bundleFile != nil {
+		return InitialFetch{}, nil
+	}
+	if _, err := os.Stat(f.vehicle.Path()); err == nil {
+		return InitialFetch{}, nil
+	}
+	if err := f.acquire(); err != nil {
+		return InitialFetch{}, err
+	}
+	defer func() { <-f.loadSlot }()
+	currentHash, _ := f.metadataSnapshot()
+	buf, hash, err := f.vehicle.Read(P.WithPublicationOwner(f.ctx, f.owner), currentHash)
+	if err != nil {
+		f.backoff.AddAttempt()
+		return InitialFetch{}, err
+	}
+	return InitialFetch{data: &initialFetchData{owner: f.owner, buf: buf, hash: hash}}, nil
+}
+
+// InitialFromFetch completes Initial. Without prefetched content it is exactly
+// Initial; with it, it is Initial's remote branch minus the network read.
+func (f *Fetcher[V]) InitialFromFetch(fetch InitialFetch) (V, error) {
+	if fetch.data == nil {
+		return f.Initial()
+	}
+	d := fetch.data
+	d.mu.Lock()
+	if d.owner != f.owner || d.consumed {
+		d.mu.Unlock()
+		return lo.Empty[V](), fmt.Errorf("invalid or consumed initial fetch token")
+	}
+	d.consumed = true
+	buf, hash := d.buf, d.hash
+	d.buf = nil
+	d.mu.Unlock()
+	if err := f.acquire(); err != nil {
+		return lo.Empty[V](), err
+	}
+	defer func() { <-f.loadSlot }()
+	contents, _, updateErr := f.loadBufAdmitted(buf, hash, true)
+	if err := f.startPullLoop(false); err != nil {
+		return lo.Empty[V](), err
+	}
+	if updateErr != nil {
+		return lo.Empty[V](), updateErr
+	}
+	return contents, nil
+}
+
 func (f *Fetcher[V]) acquire() error {
 	select {
 	case <-f.ctx.Done():

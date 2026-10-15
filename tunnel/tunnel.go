@@ -659,8 +659,14 @@ func ResolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 	default:
 		proxy, rule, err = match(metadata, helper)
 	}
+	if err == nil && proxy == nil {
+		// Released or not-yet-applied config: there is no adapter to dial.
+		err = errNoRoutingConfig
+	}
 	return
 }
+
+var errNoRoutingConfig = errors.New("no routing configuration is loaded")
 
 // processUDP starts a loop to handle udp packet
 func processUDP(queue chan C.PacketAdapter) {

@@ -3,19 +3,31 @@ package inner
 import (
 	"errors"
 	"net"
+	"sync/atomic"
 
 	N "github.com/metacubex/mihomo/common/net"
 	C "github.com/metacubex/mihomo/constant"
 )
 
-var tunnel C.Tunnel
+// current is read by any goroutine that issues a core HTTP request while a
+// config is applied or released, so it must be published atomically.
+var current atomic.Pointer[C.Tunnel]
 
+// New installs t for inner requests. New(nil) releases routing so inner HTTP
+// callers fall back to a direct dial instead of a tunnel with no config.
 func New(t C.Tunnel) {
-	tunnel = t
+	if t == nil {
+		current.Store(nil)
+		return
+	}
+	current.Store(&t)
 }
 
 func GetTunnel() C.Tunnel {
-	return tunnel
+	if t := current.Load(); t != nil {
+		return *t
+	}
+	return nil
 }
 
 func HandleTcp(tunnel C.Tunnel, address string, proxy string) (conn net.Conn, err error) {

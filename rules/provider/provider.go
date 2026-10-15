@@ -161,6 +161,11 @@ func (rp *ruleSetProvider) Initial() error {
 	return err
 }
 
+func (rp *ruleSetProvider) InitialFromFetch(fetch resource.InitialFetch) error {
+	_, err := rp.Fetcher.InitialFromFetch(fetch)
+	return err
+}
+
 func (rp *ruleSetProvider) InitialLocal() error {
 	_, err := rp.Fetcher.InitialLocal()
 	return err

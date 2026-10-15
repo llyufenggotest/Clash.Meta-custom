@@ -343,9 +343,11 @@ func (h *XHttp) initialize(ctx context.Context) (xhttpRealConfig, C.ProxyAdapter
 			cleanNodeName = strings.ReplaceAll(cleanNodeName, "|", " ")
 			keywords := strings.Fields(cleanNodeName)
 
+			// Ignore candidate Unicode whitespace only; keep keyword identity unchanged.
+			candidateName := strings.Join(strings.Fields(cfg.Name), "")
 			isMatch := true
 			for _, kw := range keywords {
-				if !strings.Contains(cfg.Name, kw) {
+				if !strings.Contains(candidateName, kw) {
 					isMatch = false
 					break
 				}

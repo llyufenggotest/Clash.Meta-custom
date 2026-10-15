@@ -1,11 +1,14 @@
 package outbound
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"strconv"
 	"strings"
+
+	"github.com/metacubex/mihomo/transport/blackstone"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -165,6 +168,15 @@ func blackstoneValidateSelectedProxy(p map[string]any) error {
 			return blackstoneSelectionCapability("certificate")
 		}
 	}
+	return blackstoneValidateTerminalProxy(p)
+}
+
+// Only outer wrappers may defer required fields to their decrypted payload.
+// Terminal objects cannot smuggle another certificate through that shortcut.
+func blackstoneValidateTerminalProxy(p map[string]any) error {
+	if _, present := p["certificate"]; present {
+		return blackstoneSelectionCapability("certificate")
+	}
 	for _, field := range []string{"server", "password"} {
 		if s, ok := p[field].(string); !ok || strings.TrimSpace(s) == "" {
 			return blackstoneSelectionCapability("fields")
@@ -173,6 +185,67 @@ func blackstoneValidateSelectedProxy(p map[string]any) error {
 	port, err := strconv.Atoi(fmt.Sprint(p["port"]))
 	if err != nil || port < 1 || port > 65535 {
 		return blackstoneSelectionCapability("fields")
+	}
+	return nil
+}
+
+// Exact SS decoding must not coerce a malformed cipher into the default.
+func blackstoneSelectedSSConfig(p map[string]any) (xhttpRealConfig, error) {
+	var fields struct {
+		Name     string      `json:"name"`
+		Server   string      `json:"server"`
+		Port     json.Number `json:"port"`
+		Password string      `json:"password"`
+		Cipher   string      `json:"cipher"`
+		UDP      bool        `json:"udp"`
+		UOT      bool        `json:"udp-over-tcp"`
+		Version  int         `json:"udp-over-tcp-version"`
+	}
+	if cipher, present := p["cipher"]; present {
+		if _, ok := cipher.(string); !ok {
+			return xhttpRealConfig{}, blackstoneSelectionCapability("ss")
+		}
+	}
+	raw, err := json.Marshal(p)
+	if err != nil || json.Unmarshal(raw, &fields) != nil || fields.Version < 0 || fields.Version > 2 {
+		return xhttpRealConfig{}, blackstoneSelectionCapability("ss")
+	}
+	if fields.Cipher == "" {
+		fields.Cipher = "2022-blake3-aes-128-gcm"
+	}
+	return xhttpRealConfig{Name: fields.Name, Type: "ss", Server: fields.Server, Port: string(fields.Port), Password: fields.Password, Cipher: fields.Cipher, UDP: fields.UDP, UDPOverTCP: fields.UOT, UDPOverTCPVersion: fields.Version}, nil
+}
+
+// This is also the final exact-path delegate constructor. No plugins are enabled,
+// so construction/Close validate local capabilities without dialing any endpoint.
+func blackstoneSelectedSS(cfg xhttpRealConfig, basic BasicOption, name string) (*ShadowSocks, error) {
+	port, err := strconv.Atoi(cfg.Port)
+	if err != nil {
+		return nil, blackstoneSelectionCapability("ss")
+	}
+	ss, err := NewShadowSocks(ShadowSocksOption{BasicOption: basic, Name: name, Server: cfg.Server, Port: port, Password: cfg.Password + "#BLACKSTONE", Cipher: cfg.Cipher, UDP: cfg.UDP, UDPOverTCP: cfg.UDPOverTCP, UDPOverTCPVersion: cfg.UDPOverTCPVersion})
+	if err != nil {
+		// Do not attach constructor text: it contains endpoint and key details.
+		return nil, blackstoneSelectionCapability("ss")
+	}
+	return ss, nil
+}
+
+func blackstoneValidateSelectedConfig(cfg xhttpRealConfig) error {
+	switch cfg.Type {
+	case "ss":
+		ss, err := blackstoneSelectedSS(cfg, BasicOption{}, "capability-validation")
+		if err != nil {
+			return err
+		}
+		_ = ss.Close()
+	case "xhttp":
+		_, err := blackstone.New(blackstone.Config{Password: cfg.Password, Cipher: cfg.Cipher, TCPFake: cfg.TcpFake, UDPFake: cfg.UdpFake})
+		if err != nil {
+			return blackstoneSelectionCapability("xhttp")
+		}
+	default:
+		return blackstoneSelectionCapability("unknown")
 	}
 	return nil
 }

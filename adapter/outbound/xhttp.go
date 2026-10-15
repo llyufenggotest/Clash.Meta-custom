@@ -381,6 +381,13 @@ func (h *XHttp) initialize(ctx context.Context) (xhttpRealConfig, C.ProxyAdapter
 
 	var ss C.ProxyAdapter
 	if best.Type == "ss" {
+		if h.blackstoneDeviceContext() {
+			ss, err = blackstoneSelectedSS(best, h.option.BasicOption, h.option.Name+"_ss")
+			if err != nil {
+				return xhttpRealConfig{}, nil, err
+			}
+			return best, ss, nil
+		}
 		portInt, _ := strconv.Atoi(best.Port)
 		ssOpt := ShadowSocksOption{
 			BasicOption: h.option.BasicOption,
@@ -410,7 +417,11 @@ func (h *XHttp) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, 
 	if ss != nil {
 		return ss.DialContext(ctx, metadata)
 	}
-	conn, err := h.dialStream(ctx, best, client, M.ParseSocksaddr(metadata.RemoteAddress()))
+	dest := M.ParseSocksaddr(metadata.RemoteAddress())
+	if metadata.AddrType() == C.AtypDomainName {
+		dest = M.Socksaddr{Fqdn: metadata.RuleHost(), Port: metadata.DstPort}
+	}
+	conn, err := h.dialStream(ctx, best, client, dest)
 	if err != nil {
 		return nil, err
 	}
@@ -487,6 +498,9 @@ func (h *XHttp) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (
 		return nil, err
 	}
 	if ss != nil {
+		if !ss.SupportUDP() {
+			return nil, C.ErrNotSupport
+		}
 		return ss.ListenPacketContext(ctx, metadata)
 	}
 	if !best.UDP {
@@ -519,11 +533,29 @@ func (h *XHttp) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (
 	return NewPacketConn(client.PacketConn(pc, remote), h), nil
 }
 
+// Unknown capability is conservatively false. Queries never initialize/fetch;
+// the selected generation (including a retained generation after refresh failure)
+// is published with its delegate under initMu.
+func (h *XHttp) SupportUDP() bool {
+	h.initMu.Lock()
+	defer h.initMu.Unlock()
+	if !h.isInit {
+		return false
+	}
+	if h.ssOutbound != nil {
+		return h.ssOutbound.SupportUDP()
+	}
+	return h.bestCfg.UDP
+}
+
 func (h *XHttp) SupportUOT() bool {
 	h.initMu.Lock()
 	defer h.initMu.Unlock()
+	if !h.isInit {
+		return false
+	}
 	if h.ssOutbound != nil {
-		return h.ssOutbound.SupportUOT()
+		return h.ssOutbound.SupportUDP() && h.ssOutbound.SupportUOT()
 	}
 	return h.isInit && h.bestCfg.UDP && h.bestCfg.UDPOverTCP
 }
@@ -1084,6 +1116,14 @@ func (h *XHttp) processBlackstoneSelectionData(encryptedB64 string, exact bool) 
 			if err := blackstoneValidateSelectedProxy(proxy); err != nil {
 				return nil, err
 			}
+			if proxy["type"] == "ss" {
+				cfg, err := blackstoneSelectedSSConfig(proxy)
+				if err != nil {
+					return nil, err
+				}
+				realConfigs = append(realConfigs, cfg)
+				continue
+			}
 		}
 		pName, _ := proxy["name"].(string)
 		pType, _ := proxy["type"].(string)
@@ -1121,6 +1161,9 @@ func (h *XHttp) processBlackstoneSelectionData(encryptedB64 string, exact bool) 
 			} else {
 				cfg, err := parseBlackstoneConfig(proxy)
 				if err != nil {
+					if exact {
+						return nil, blackstoneSelectionCapability("xhttp")
+					}
 					return nil, err
 				}
 				cfg.Name = pName
@@ -1135,6 +1178,14 @@ func (h *XHttp) processBlackstoneSelectionData(encryptedB64 string, exact bool) 
 		return nil, blackstoneStageError("node-selection", errors.New("api returned no valid nodes"))
 	}
 
+	if exact {
+		// Validate the entire selected set, not only the eventual race winner.
+		for _, cfg := range realConfigs {
+			if err := blackstoneValidateSelectedConfig(cfg); err != nil {
+				return nil, err
+			}
+		}
+	}
 	return realConfigs, nil
 }
 
@@ -1166,7 +1217,7 @@ func parseBlackstoneConfig(data map[string]interface{}) (xhttpRealConfig, error)
 	if wire.UDPOverTCPVersion < 0 || wire.UDPOverTCPVersion > 2 {
 		return xhttpRealConfig{}, errors.New("blackstone: unsupported UOT version")
 	}
-	udp := true // Legacy adapter had no explicit inner UDP field; preserve that contract.
+	udp := false // Official zero-initialized inner option leaves omitted UDP disabled.
 	if wire.UDP != nil {
 		udp = *wire.UDP
 	}
@@ -1199,7 +1250,7 @@ func (h *XHttp) crackBlackstoneSelectionCertificate(certPem string, exact bool) 
 			var innerData map[string]interface{}
 			if json.Unmarshal(plain, &innerData) == nil {
 				if exact {
-					if innerData["type"] != "xhttp" || blackstoneValidateSelectedProxy(innerData) != nil {
+					if innerData["type"] != "xhttp" || blackstoneValidateTerminalProxy(innerData) != nil {
 						return xhttpRealConfig{}, blackstoneSelectionCapability("certificate")
 					}
 				}

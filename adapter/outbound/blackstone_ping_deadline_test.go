@@ -11,7 +11,7 @@ import (
 func TestBlackstonePingDeadlinePreservesCallerCause(t *testing.T) {
 	h, _ := NewXHttp(XHttpOption{DeviceID: "synthetic", DeviceName: "synthetic"})
 	h.dialer = &blackstoneRaceDialer{done: make(chan struct{})}
-	envelope := fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: loser, port: 1, password: 'synthetic:00'}\n - {name: synthetic, type: xhttp, server: loser, port: 2, password: 'synthetic:00'}\n")
+	envelope := fixtureBlackstoneRoutedEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: loser, port: 1, password: 'synthetic:00'}\n - {name: synthetic-2, type: xhttp, server: loser, port: 2, password: 'synthetic:00'}\n")
 	fixtureBlackstoneClient(t, func(*http.Request) (*http.Response, error) {
 		return blackstoneResponse(`{"data":"` + envelope + `"}`), nil
 	})

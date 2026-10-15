@@ -69,7 +69,7 @@ func (b *blackstoneCloseBody) Close() error { b.closes.Add(1); return b.err }
 
 func TestBlackstoneRefresh304AndCancellationPreserveOldCache(t *testing.T) {
 	h, _ := NewXHttp(XHttpOption{DeviceID: "synthetic", DeviceName: "synthetic"})
-	envelope := fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: old, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
+	envelope := fixtureBlackstoneRoutedEnvelope(t, h, "proxies:\n - {name: old, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
 	var calls atomic.Int32
 	body := &blackstoneCloseBody{Reader: strings.NewReader(`{"code":304,"message":"fixture-secret"}`)}
 	refreshFlight := make(chan *xhttpInitFlight, 1)
@@ -110,7 +110,7 @@ func TestBlackstoneRefresh304AndCancellationPreserveOldCache(t *testing.T) {
 
 func TestBlackstoneBodyCloseFailurePreventsCachePublish(t *testing.T) {
 	h, _ := NewXHttp(XHttpOption{DeviceID: "synthetic", DeviceName: "synthetic"})
-	envelope := fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
+	envelope := fixtureBlackstoneRoutedEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
 	sentinel := errors.New("fixture-token secret close error")
 	body := &blackstoneCloseBody{Reader: strings.NewReader(`{"data":"` + envelope + `"}`), err: sentinel}
 	fixtureBlackstoneClient(t, func(*http.Request) (*http.Response, error) {
@@ -124,7 +124,7 @@ func TestBlackstoneBodyCloseFailurePreventsCachePublish(t *testing.T) {
 
 func TestBlackstoneAllFalseConfigsDoNotFallback(t *testing.T) {
 	h, _ := NewXHttp(XHttpOption{DeviceID: "synthetic", DeviceName: "synthetic"})
-	envelope := fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00', matched: false}\n - {name: other, type: ss, server: 127.0.0.1, port: 443, cipher: aes-128-gcm, password: synthetic, matched: false}\n")
+	envelope := fixtureBlackstoneRoutedEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00', matched: false}\n - {name: other, type: ss, server: 127.0.0.1, port: 443, cipher: aes-128-gcm, password: synthetic, matched: false}\n")
 	fixtureBlackstoneClient(t, func(*http.Request) (*http.Response, error) {
 		return blackstoneResponse(`{"data":"` + envelope + `"}`), nil
 	})
@@ -136,7 +136,7 @@ func TestBlackstoneAllFalseConfigsDoNotFallback(t *testing.T) {
 
 func TestBlackstoneCanceledAfterResponseDoesNotPublishCache(t *testing.T) {
 	h, _ := NewXHttp(XHttpOption{DeviceID: "synthetic", DeviceName: "synthetic"})
-	envelope := fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
+	envelope := fixtureBlackstoneRoutedEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	body := &blackstoneCancelOnCloseBody{Reader: strings.NewReader(`{"data":"` + envelope + `"}`), cancel: cancel}

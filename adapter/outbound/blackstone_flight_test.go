@@ -31,7 +31,7 @@ func blackstoneFlightResult(t *testing.T, ch <-chan error) error {
 // wait select before cancellation. One continuing POST, not an automatic retry.
 func TestBlackstoneOwnerCancelKeepsLiveWaiter(t *testing.T) {
 	h, _ := NewXHttp(XHttpOption{DeviceID: "synthetic", DeviceName: "synthetic"})
-	envelope := fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
+	envelope := fixtureBlackstoneRoutedEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
 	started, release := make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
 	fixtureBlackstoneClient(t, func(r *http.Request) (*http.Response, error) {
@@ -83,7 +83,7 @@ func blackstoneFlightFinished(t *testing.T, f *xhttpInitFlight) {
 
 func TestBlackstoneOwnerDeadlineKeepsLongWaiterAndContextValues(t *testing.T) {
 	h, _ := NewXHttp(XHttpOption{DeviceID: "synthetic", DeviceName: "synthetic"})
-	envelope := fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
+	envelope := fixtureBlackstoneRoutedEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
 	started, release := make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
 	fixtureBlackstoneClient(t, func(r *http.Request) (*http.Response, error) {
@@ -164,8 +164,8 @@ func TestBlackstoneSharedFlightPolicyTimeout(t *testing.T) {
 
 func TestBlackstoneAbandonedLateResultCannotReplaceNewAttempt(t *testing.T) {
 	h, _ := NewXHttp(XHttpOption{DeviceID: "synthetic", DeviceName: "synthetic"})
-	oldEnvelope := fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: abandoned, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
-	newEnvelope := fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: replacement, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
+	oldEnvelope := fixtureBlackstoneRoutedEnvelope(t, h, "proxies:\n - {name: abandoned, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
+	newEnvelope := fixtureBlackstoneRoutedEnvelope(t, h, "proxies:\n - {name: replacement, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
 	first, second, releaseOld, releaseNew := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
 	fixtureBlackstoneClient(t, func(r *http.Request) (*http.Response, error) {
@@ -225,7 +225,7 @@ func TestBlackstoneSharedFlightRealTLS(t *testing.T) {
 	for _, allCancel := range []bool{false, true} {
 		t.Run(map[bool]string{false: "live-waiter", true: "all-cancel"}[allCancel], func(t *testing.T) {
 			h, _ := NewXHttp(XHttpOption{DeviceID: "synthetic", DeviceName: "synthetic"})
-			envelope := fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
+			envelope := fixtureBlackstoneRoutedEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
 			entered, release, serverCanceled, connClosed := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
 			var calls atomic.Int32
 			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

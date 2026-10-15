@@ -106,7 +106,7 @@ func TestBlackstoneFailedFetchIsSingleFlight(t *testing.T) {
 
 func TestBlackstoneFailedThenSuccessfulFetch(t *testing.T) {
 	h, _ := NewXHttp(XHttpOption{DeviceID: "synthetic", DeviceName: "synthetic"})
-	envelope := fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
+	envelope := fixtureBlackstoneRoutedEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
 	var calls atomic.Int32
 	fixtureBlackstoneClient(t, func(r *http.Request) (*http.Response, error) {
 		if calls.Add(1) == 1 {

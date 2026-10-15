@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	C "github.com/metacubex/mihomo/constant"
+	"go.yaml.in/yaml/v3"
 	"golang.org/x/crypto/chacha20poly1305"
 	"io"
 	"net"
@@ -18,6 +19,28 @@ import (
 	"testing"
 	"time"
 )
+
+// fixtureBlackstoneRoutedEnvelope explicitly upgrades old transport/flight
+// fixtures to the device routing contract. The raw envelope helper below never
+// repairs malformed or missing routing fields (negative tests depend on that).
+func fixtureBlackstoneRoutedEnvelope(t *testing.T, h *XHttp, plain string) string {
+	t.Helper()
+	var doc struct {
+		Proxies []map[string]any `yaml:"proxies"`
+	}
+	if err := yaml.Unmarshal([]byte(plain), &doc); err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(doc.Proxies))
+	for _, p := range doc.Proxies {
+		names = append(names, p["name"].(string))
+	}
+	b, err := yaml.Marshal(map[string]any{"mode": "rule", "rules": []string{"MATCH,FixtureMain"}, "proxy-groups": []map[string]any{{"name": "FixtureMain", "type": "url-test", "proxies": names}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fixtureBlackstoneEnvelope(t, h, plain+string(b))
+}
 
 func fixtureBlackstoneEnvelope(t *testing.T, h *XHttp, plain string) string {
 	t.Helper()
@@ -112,7 +135,7 @@ func TestBlackstoneBusinessFailureSafe(t *testing.T) {
 	}
 }
 func TestBlackstoneMatchedSSFallbackAndFieldTypes(t *testing.T) {
-	h, _ := NewXHttp(XHttpOption{Name: "synthetic#node", DeviceID: "synthetic", DeviceName: "synthetic"})
+	h, _ := NewXHttp(XHttpOption{Name: "synthetic#node"}) // Legacy keyword/SS fallback contract.
 	envelope := fixtureBlackstoneEnvelope(t, h, "proxies:\n  - {name: unrelated, type: ss, server: 192.0.2.1, port: 1234, cipher: aes-128-gcm, password: synthetic}\n  - {name: synthetic node, type: ss, server: 127.0.0.1, port: 4321, cipher: aes-128-gcm, password: synthetic}\n")
 	fixtureBlackstoneClient(t, func(*http.Request) (*http.Response, error) {
 		b, _ := json.Marshal(map[string]string{"data": envelope})

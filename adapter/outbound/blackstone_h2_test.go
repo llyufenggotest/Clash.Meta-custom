@@ -365,7 +365,7 @@ func TestBlackstoneH2Boundaries(t *testing.T) {
 	for _, mode := range []string{"goaway-unprocessed", "goaway-processed", "body-reset", "204", "redirect", "normal"} {
 		t.Run(mode, func(t *testing.T) {
 			h := blackstoneH2Adapter(t)
-			envelope := fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
+			envelope := fixtureBlackstoneRoutedEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
 			f := newBlackstoneH2Fixture(t, mode, xhttpAPICDNHost, []byte(`{"data":"`+envelope+`"}`))
 			f.install(t)
 			configs, err := h.fetchDynamicConfig(f.ctx(context.Background()), "synthetic-node", "synthetic-token")
@@ -416,7 +416,7 @@ func TestBlackstoneH2FlightCancellation(t *testing.T) {
 	for _, mode := range []string{"cancel", "late-cancel"} {
 		t.Run(mode, func(t *testing.T) {
 			h := blackstoneH2Adapter(t)
-			envelope := fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
+			envelope := fixtureBlackstoneRoutedEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
 			f := newBlackstoneH2Fixture(t, mode, xhttpAPICDNHost, []byte(`{"data":"`+envelope+`"}`))
 			f.install(t)
 			ctx, cancel := context.WithCancel(context.Background())
@@ -468,7 +468,7 @@ func TestBlackstoneH2FlightCancellation(t *testing.T) {
 
 func TestBlackstoneH2CanceledAfterResponseCannotPublish(t *testing.T) {
 	h := blackstoneH2Adapter(t)
-	envelope := fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
+	envelope := fixtureBlackstoneRoutedEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
 	f := newBlackstoneH2Fixture(t, "normal", xhttpAPICDNHost, []byte(`{"data":"`+envelope+`"}`))
 	f.install(t)
 	ctx, cancel := context.WithCancel(context.Background())

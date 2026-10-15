@@ -19,7 +19,7 @@ func checkBlackstoneNameSelection(t *testing.T, label string, names []string, wa
 	d := &probeRejectDialer{}
 	h, err := NewXHttp(XHttpOption{
 		BasicOption: BasicOption{DialerForAPI: d},
-		Name:        label, DeviceID: "synthetic", DeviceName: "synthetic",
+		Name:        label, // Legacy subscription keyword contract, intentionally no device pair.
 	})
 	if err != nil {
 		t.Fatal(err)

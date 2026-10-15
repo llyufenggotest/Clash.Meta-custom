@@ -348,7 +348,7 @@ func (h *XHttp) initialize(ctx context.Context) (xhttpRealConfig, C.ProxyAdapter
 	isSingleNode := len(allConfigs) == 1
 
 	for _, cfg := range allConfigs {
-		if !isSingleNode && h.option.Name != "" {
+		if !h.blackstoneDeviceContext() && !isSingleNode && h.option.Name != "" {
 			cleanNodeName := strings.ReplaceAll(h.option.Name, "#", " ")
 			cleanNodeName = strings.ReplaceAll(cleanNodeName, "-", " ")
 			cleanNodeName = strings.ReplaceAll(cleanNodeName, "|", " ")
@@ -992,17 +992,21 @@ func (h *XHttp) fetchDynamicConfig(ctx context.Context, nodeID, token string) (c
 	var jsonResp map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &jsonResp); err != nil {
 		encryptedB64 := strings.Trim(string(bodyBytes), "\"'\n\r	 ")
-		return h.processApiData(encryptedB64)
+		return h.processBlackstoneSelectionData(encryptedB64, deviceContext)
 	}
 	business = blackstoneNumericCode(jsonResp)
 	encryptedB64, ok := jsonResp["data"].(string)
 	if !ok || encryptedB64 == "" {
 		return nil, blackstoneAdmissionError(resp.StatusCode, jsonResp, "response")
 	}
-	return h.processApiData(encryptedB64)
+	return h.processBlackstoneSelectionData(encryptedB64, deviceContext)
 }
 
-func (h *XHttp) processApiData(encryptedB64 string) (configs []xhttpRealConfig, resultErr error) {
+func (h *XHttp) processApiData(encryptedB64 string) ([]xhttpRealConfig, error) {
+	return h.processBlackstoneSelectionData(encryptedB64, false)
+}
+
+func (h *XHttp) processBlackstoneSelectionData(encryptedB64 string, exact bool) (configs []xhttpRealConfig, resultErr error) {
 	stage := "decrypt"
 	defer func() {
 		if resultErr == nil {
@@ -1066,8 +1070,21 @@ func (h *XHttp) processApiData(encryptedB64 string) (configs []xhttpRealConfig, 
 		return nil, fmt.Errorf("decode smart config: %w", err)
 	}
 
+	if exact {
+		stage = "node-selection"
+		smartData.Proxies, err = blackstoneDecodeSelection(smartPlain)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	var realConfigs []xhttpRealConfig
 	for _, proxy := range smartData.Proxies {
+		if exact {
+			if err := blackstoneValidateSelectedProxy(proxy); err != nil {
+				return nil, err
+			}
+		}
 		pName, _ := proxy["name"].(string)
 		pType, _ := proxy["type"].(string)
 
@@ -1093,7 +1110,10 @@ func (h *XHttp) processApiData(encryptedB64 string) (configs []xhttpRealConfig, 
 		} else if pType == "xhttp" {
 			certStr, _ := proxy["certificate"].(string)
 			if certStr != "" {
-				realCfg, err := h.crackCertificate(certStr)
+				realCfg, err := h.crackBlackstoneSelectionCertificate(certStr, exact)
+				if exact && err != nil {
+					return nil, blackstoneSelectionCapability("certificate")
+				}
 				if err == nil {
 					realCfg.Name = pName
 					realConfigs = append(realConfigs, realCfg)
@@ -1106,6 +1126,8 @@ func (h *XHttp) processApiData(encryptedB64 string) (configs []xhttpRealConfig, 
 				cfg.Name = pName
 				realConfigs = append(realConfigs, cfg)
 			}
+		} else if exact {
+			return nil, blackstoneSelectionCapability("unknown")
 		}
 	}
 
@@ -1152,6 +1174,10 @@ func parseBlackstoneConfig(data map[string]interface{}) (xhttpRealConfig, error)
 }
 
 func (h *XHttp) crackCertificate(certPem string) (xhttpRealConfig, error) {
+	return h.crackBlackstoneSelectionCertificate(certPem, false)
+}
+
+func (h *XHttp) crackBlackstoneSelectionCertificate(certPem string, exact bool) (xhttpRealConfig, error) {
 	re := regexp.MustCompile(`-----BEGIN CERTIFICATE-----|-----END CERTIFICATE-----|\s+`)
 	b64Data := re.ReplaceAllString(certPem, "")
 	if pad := len(b64Data) % 4; pad != 0 {
@@ -1172,6 +1198,11 @@ func (h *XHttp) crackCertificate(certPem string) (xhttpRealConfig, error) {
 		if err == nil {
 			var innerData map[string]interface{}
 			if json.Unmarshal(plain, &innerData) == nil {
+				if exact {
+					if innerData["type"] != "xhttp" || blackstoneValidateSelectedProxy(innerData) != nil {
+						return xhttpRealConfig{}, blackstoneSelectionCapability("certificate")
+					}
+				}
 				return parseBlackstoneConfig(innerData)
 			}
 		}

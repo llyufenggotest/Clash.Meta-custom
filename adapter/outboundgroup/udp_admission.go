@@ -2,6 +2,8 @@ package outboundgroup
 
 import (
 	"context"
+	"fmt"
+
 	C "github.com/metacubex/mihomo/constant"
 )
 
@@ -42,24 +44,28 @@ func (s *Selector) AdmitUDP(ctx context.Context, m *C.Metadata) (C.ProxyAdapter,
 	if s.disableUDP {
 		return nil, C.ErrNotSupport
 	}
-	return admitGroupUDP(ctx, s, s.Unwrap(m, false), false, m)
+	return admitGroupUDP(ctx, s, s.Unwrap(m, true), false, m)
 }
 func (s *Fallback) AdmitUDP(ctx context.Context, m *C.Metadata) (C.ProxyAdapter, error) {
 	if s.disableUDP {
 		return nil, C.ErrNotSupport
 	}
-	return admitGroupUDP(ctx, s, s.Unwrap(m, false), false, m)
+	return admitGroupUDP(ctx, s, s.Unwrap(m, true), false, m)
 }
 func (s *URLTest) AdmitUDP(ctx context.Context, m *C.Metadata) (C.ProxyAdapter, error) {
 	if s.disableUDP {
 		return nil, C.ErrNotSupport
 	}
-	return admitGroupUDP(ctx, s, s.Unwrap(m, false), false, m)
+	return admitGroupUDP(ctx, s, s.Unwrap(m, true), false, m)
 }
 func (s *LoadBalance) AdmitUDP(ctx context.Context, m *C.Metadata) (C.ProxyAdapter, error) {
 	if s.disableUDP {
 		return nil, C.ErrNotSupport
 	}
 	// Reserve the round-robin selection exactly once for this actual request.
-	return admitGroupUDP(ctx, s, s.Unwrap(m, true), false, m)
+	a, err := admitGroupUDP(ctx, s, s.Unwrap(m, true), false, m)
+	if err == C.ErrNotSupport {
+		return nil, fmt.Errorf("load-balance selected node UDP is not supported: %w", err)
+	}
+	return a, err
 }

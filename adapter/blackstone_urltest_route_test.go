@@ -83,9 +83,9 @@ func TestBlackstoneURLTestBypassesFrontProxy(t *testing.T) {
 				if err != nil || front.calls.Load() != 0 || accepted.Load() != 1 {
 					t.Fatalf("URLTest err=%v front_calls=%d direct_accepts=%d; want nil/0/1", err, front.calls.Load(), accepted.Load())
 				}
-				// Audit only: preserve the existing wrapper's missing history behavior.
-				if len(p.DelayHistory()) != 0 || len(p.ExtraDelayHistories()) != 0 || p.LastDelayForTestUrl("https://must-not-request.invalid") != 65535 {
-					t.Fatal("history behavior unexpectedly changed")
+				// TCP-only probes must publish the same state consumed by automatic selection.
+				if len(p.DelayHistory()) != 1 || len(p.ExtraDelayHistories()) != 1 || !p.AliveForTestUrl("https://must-not-request.invalid") || p.LastDelayForTestUrl("https://must-not-request.invalid") == 65535 {
+					t.Fatalf("missing successful probe state: history=%v extra=%v last=%d", p.DelayHistory(), p.ExtraDelayHistories(), p.LastDelayForTestUrl("https://must-not-request.invalid"))
 				}
 			})
 		}

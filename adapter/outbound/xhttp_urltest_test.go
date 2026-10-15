@@ -36,9 +36,9 @@ func TestXHTTPURLTestOnlyPingsConfiguredTCPAddress(t *testing.T) {
 		option: &XHttpOption{NodeID: "must-not-be-fetched"},
 	}
 	adapter.directProbeDialer = dialer
-	wrapper := &XHttpProxyWrapper{adapter: adapter}
+	wrapper := adapter
 
-	if _, err := wrapper.URLTest(context.Background(), "https://example.com", nil); err != nil {
+	if _, err := wrapper.TCPProbe(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if dialer.calls != 1 || dialer.network != "tcp" || dialer.address != "192.0.2.1:443" {

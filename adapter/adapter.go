@@ -234,6 +234,12 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 
 	}()
 
+	if probe, ok := p.ProxyAdapter.(C.TCPProber); ok {
+		t, err = probe.TCPProbe(ctx)
+		satisfied = err == nil // TCP probes intentionally ignore HTTP expected status.
+		return
+	}
+
 	unifiedDelay := UnifiedDelay.Load()
 
 	addr, err := urlToMetadata(url)

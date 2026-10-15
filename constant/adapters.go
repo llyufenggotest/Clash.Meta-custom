@@ -127,6 +127,12 @@ type ProxyInfo struct {
 	DialerProxy  string
 }
 
+// TCPProber optionally replaces HTTP URL testing with a TCP-only probe.
+// The owning Proxy still applies probe limits, hooks and health histories.
+type TCPProber interface {
+	TCPProbe(ctx context.Context) (uint16, error)
+}
+
 type ProxyAdapter interface {
 	TrafficCounter() *TrafficCounter
 	Name() string

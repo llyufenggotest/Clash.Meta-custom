@@ -97,16 +97,30 @@ type XHttpProxyWrapper struct {
 }
 
 func (x *XHttpProxyWrapper) URLTest(ctx context.Context, url string, expectedStatus utils.IntRanges[uint16]) (uint16, error) {
-	start := time.Now()
+	return x.Proxy.URLTest(ctx, url, expectedStatus)
+}
 
-	// Probe the configured address directly without changing the data dialer.
-	conn, err := x.adapter.directProbeDialer.DialContext(ctx, "tcp", x.adapter.addr)
+// TCPProbe probes only the configured address, without initialization or front routing.
+func (x *XHttp) TCPProbe(ctx context.Context) (uint16, error) {
+	start := time.Now()
+	conn, err := x.directProbeDialer.DialContext(ctx, "tcp", x.addr)
 	if err != nil {
 		return 0, err
 	}
 	conn.Close()
 
-	return uint16(time.Since(start).Milliseconds()), nil
+	return tcpProbeDelay(time.Since(start)), nil
+}
+
+func tcpProbeDelay(elapsed time.Duration) uint16 {
+	// Zero means failed/no history; 65535 is the unavailable-node sentinel.
+	millis := elapsed.Milliseconds()
+	if millis < 1 {
+		millis = 1
+	} else if millis > 65534 {
+		millis = 65534
+	}
+	return uint16(millis)
 }
 
 func NewXHttpProxyWrapper(baseProxy C.Proxy, adapter *XHttp) C.Proxy {

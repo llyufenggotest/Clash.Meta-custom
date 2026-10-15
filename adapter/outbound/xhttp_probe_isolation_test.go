@@ -56,14 +56,14 @@ func TestXHTTPURLTestConcurrentDataDialIsolation(t *testing.T) {
 	h.isInit = true
 	h.lastFetch = time.Now()
 	h.bestCfg = xhttpRealConfig{Server: host, Port: port}
-	wrapper := NewXHttpProxyWrapper(nil, h)
+	wrapper := h
 	const count = 32
 	var wg sync.WaitGroup
 	for i := 0; i < count; i++ {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			if _, e := wrapper.URLTest(context.Background(), "ignored", nil); e != nil {
+			if _, e := wrapper.TCPProbe(context.Background()); e != nil {
 				t.Error(e)
 			}
 		}()
@@ -115,7 +115,7 @@ func TestXHTTPURLTestHonorsCanceledAndExpiredContext(t *testing.T) {
 			cancel()
 		}
 		defer cancel()
-		if _, err := NewXHttpProxyWrapper(nil, h).URLTest(ctx, "ignored", nil); !errors.Is(err, want) {
+		if _, err := h.TCPProbe(ctx); !errors.Is(err, want) {
 			t.Fatalf("expired=%v err=%v want=%v", expired, err, want)
 		}
 	}

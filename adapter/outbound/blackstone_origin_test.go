@@ -106,7 +106,7 @@ func blackstoneOriginTrust(t *testing.T, roots *x509.CertPool) {
 }
 func TestBlackstoneOriginVerifiedTLS(t *testing.T) {
 	h := blackstoneH2Adapter(t)
-	body := `{"data":"` + fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n") + `"}`
+	body := `{"data":"` + fixtureBlackstoneRoutedEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n") + `"}`
 	hits := 0
 	s, roots := blackstoneOriginServer(t, blackstoneTestCDN, func(w http.ResponseWriter, r *http.Request) {
 		hits++
@@ -128,7 +128,7 @@ func TestBlackstoneOriginVerifiedTLS(t *testing.T) {
 
 func TestBlackstoneOriginFallbackPreservesHTTP2(t *testing.T) {
 	h := blackstoneH2Adapter(t)
-	response := []byte(`{"data":"` + fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n") + `"}`)
+	response := []byte(`{"data":"` + fixtureBlackstoneRoutedEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n") + `"}`)
 	f := newBlackstoneH2Fixture(t, "normal", xhttpAPIHost, response)
 	blackstoneOriginTrust(t, f.roots)
 	d := &blackstoneOriginDialer{dial: func(ctx context.Context, n, a string) (net.Conn, error) {
@@ -158,7 +158,7 @@ func TestBlackstoneOriginSafeFallback(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			h := blackstoneH2Adapter(t)
 			hits := 0
-			body := `{"data":"` + fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n") + `"}`
+			body := `{"data":"` + fixtureBlackstoneRoutedEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n") + `"}`
 			s, roots := blackstoneOriginServer(t, xhttpAPIHost, func(w http.ResponseWriter, r *http.Request) {
 				hits++
 				if r.Host != xhttpAPIHost || r.TLS.ServerName != xhttpAPIHost {

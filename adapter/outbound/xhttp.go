@@ -96,7 +96,6 @@ type XHttp struct {
 	// Retain retired delegates until Close: in-flight old-generation streams
 	// must keep their own transport/cache while refresh publishes a new one.
 	delegates []C.ProxyAdapter
-	closed    bool
 	transport *blackstone.Client
 
 	// Only URLTest bypasses dialer-proxy and API dialer overrides. Control,

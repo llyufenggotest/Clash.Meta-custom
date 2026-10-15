@@ -24,6 +24,7 @@ import (
 	"net/http/httptrace"
 	"syscall"
 
+	"github.com/metacubex/mihomo/component/dialer"
 	"github.com/metacubex/mihomo/component/resolver"
 	"github.com/metacubex/mihomo/log"
 	"regexp"
@@ -81,6 +82,10 @@ type XHttp struct {
 	bestCfg    xhttpRealConfig
 	lastFetch  time.Time
 	ssOutbound C.ProxyAdapter
+
+	// Only URLTest bypasses dialer-proxy and API dialer overrides. Control,
+	// ping-race and data traffic retain the original Base.dialer.
+	directProbeDialer C.Dialer
 }
 
 // ========================
@@ -94,8 +99,8 @@ type XHttpProxyWrapper struct {
 func (x *XHttpProxyWrapper) URLTest(ctx context.Context, url string, expectedStatus utils.IntRanges[uint16]) (uint16, error) {
 	start := time.Now()
 
-	// 直接拨号 YAML 文件里存在的 x.adapter.addr
-	conn, err := x.adapter.dialer.DialContext(ctx, "tcp", x.adapter.addr)
+	// Probe the configured address directly without changing the data dialer.
+	conn, err := x.adapter.directProbeDialer.DialContext(ctx, "tcp", x.adapter.addr)
 	if err != nil {
 		return 0, err
 	}
@@ -121,6 +126,7 @@ func NewXHttp(option XHttpOption) (*XHttp, error) {
 		option: &option,
 	}
 	outbound.dialer = option.NewDialer(outbound.DialOptions())
+	outbound.directProbeDialer = dialer.NewDialer(outbound.Base.DialOptions()...)
 	return outbound, nil
 }
 

@@ -62,6 +62,18 @@ func (p *Proxy) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, 
 	return conn, err
 }
 
+// AdmitUDP explicitly preserves optional request admission across Proxy wrapping.
+func (p *Proxy) AdmitUDP(ctx context.Context, metadata *C.Metadata) (C.ProxyAdapter, error) {
+	a, err := C.AdmitUDP(ctx, p.ProxyAdapter, metadata)
+	if err != nil {
+		return nil, err
+	}
+	if a == p.ProxyAdapter {
+		return p, nil
+	}
+	return a, nil
+}
+
 // ListenPacketContext implements C.ProxyAdapter
 func (p *Proxy) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (C.PacketConn, error) {
 	pc, err := p.ProxyAdapter.ListenPacketContext(ctx, metadata)

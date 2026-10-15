@@ -86,6 +86,7 @@ type XHttp struct {
 	option     *XHttpOption
 	initMu     sync.Mutex
 	isInit     bool
+	closed     bool
 	initErr    error
 	initFlight *xhttpInitFlight
 	bestCfg    xhttpRealConfig
@@ -236,6 +237,10 @@ func (h *XHttp) lazyInit(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		h.initMu.Unlock()
 		return err
+	}
+	if h.closed {
+		h.initMu.Unlock()
+		return net.ErrClosed
 	}
 	if h.isInit && time.Since(h.lastFetch) < time.Hour {
 		h.initMu.Unlock()
@@ -433,6 +438,9 @@ func (h *XHttp) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, 
 func (h *XHttp) transportSnapshot() (xhttpRealConfig, C.ProxyAdapter, *blackstone.Client, error) {
 	h.initMu.Lock()
 	defer h.initMu.Unlock()
+	if h.closed {
+		return xhttpRealConfig{}, nil, nil, net.ErrClosed
+	}
 	if h.ssOutbound != nil {
 		return h.bestCfg, h.ssOutbound, nil, nil
 	}
@@ -539,7 +547,7 @@ func (h *XHttp) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (
 func (h *XHttp) SupportUDP() bool {
 	h.initMu.Lock()
 	defer h.initMu.Unlock()
-	if !h.isInit {
+	if !h.isInit || h.closed {
 		return false
 	}
 	if h.ssOutbound != nil {
@@ -551,7 +559,7 @@ func (h *XHttp) SupportUDP() bool {
 func (h *XHttp) SupportUOT() bool {
 	h.initMu.Lock()
 	defer h.initMu.Unlock()
-	if !h.isInit {
+	if !h.isInit || h.closed {
 		return false
 	}
 	if h.ssOutbound != nil {
@@ -559,7 +567,40 @@ func (h *XHttp) SupportUOT() bool {
 	}
 	return h.isInit && h.bestCfg.UDP && h.bestCfg.UDPOverTCP
 }
-func (h *XHttp) Close() error { return nil }
+
+// AdmitUDP is the only effectful capability admission, used by real UDP callers.
+func (h *XHttp) AdmitUDP(ctx context.Context, metadata *C.Metadata) (C.ProxyAdapter, error) {
+	ctx, cancel := C.WithUDPAdmissionBudget(ctx)
+	defer cancel()
+	if err := h.lazyInit(ctx); err != nil {
+		return nil, err
+	}
+	if !h.SupportUDP() {
+		return nil, fmt.Errorf("blackstone selected node UDP is not supported: %w", C.ErrNotSupport)
+	}
+	return h, nil
+}
+
+func (x *XHttpProxyWrapper) AdmitUDP(ctx context.Context, metadata *C.Metadata) (C.ProxyAdapter, error) {
+	return C.AdmitUDP(ctx, x.Proxy, metadata)
+}
+
+func (h *XHttp) Close() error {
+	h.initMu.Lock()
+	h.closed = true
+	h.isInit = false
+	if h.initFlight != nil {
+		h.initFlight.cancel()
+		h.initFlight = nil
+	}
+	ss := h.ssOutbound
+	h.ssOutbound = nil
+	h.initMu.Unlock()
+	if ss != nil {
+		return ss.Close()
+	}
+	return nil
+}
 
 // ========================
 // API 请求解析核心 (+ 修复 <nil> cipher BUG)

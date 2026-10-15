@@ -566,12 +566,31 @@ func preHandleMetadata(metadata *C.Metadata) error {
 	return nil
 }
 
-func ResolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err error) {
+// ResolveMetadata is the compatibility entry; business callers pass their ctx.
+func ResolveMetadata(metadata *C.Metadata) (C.Proxy, C.Rule, error) {
+	return ResolveMetadataContext(context.Background(), metadata)
+}
+
+func ResolveMetadataContext(ctx context.Context, metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err error) {
+	if metadata.NetWork == C.UDP {
+		var cancel context.CancelFunc
+		ctx, cancel = C.WithUDPAdmissionBudget(ctx)
+		defer cancel()
+	}
+	if err = ctx.Err(); err != nil {
+		return
+	}
+	configMux.RLock()
+	proxySnapshot := proxies
+	configMux.RUnlock()
 	if metadata.SpecialProxy != "" {
 		var exist bool
-		proxy, exist = proxies[metadata.SpecialProxy]
+		proxy, exist = proxySnapshot[metadata.SpecialProxy]
 		if !exist {
 			err = fmt.Errorf("proxy %s not found", metadata.SpecialProxy)
+		}
+		if err == nil && metadata.NetWork == C.UDP {
+			proxy, err = admitUDPProxy(ctx, proxy, metadata)
 		}
 		return
 	}
@@ -588,7 +607,7 @@ func ResolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 	helper := C.RuleMatchHelper{
 		ResolveIP: func() {
 			if !resolved && metadata.Host != "" && !metadata.Resolved() {
-				ctx, cancel := context.WithTimeout(resolver.WithInitiator(context.Background(), resolver.InitiatorRule), resolver.DefaultDNSTimeout)
+				ctx, cancel := context.WithTimeout(resolver.WithInitiator(ctx, resolver.InitiatorRule), resolver.DefaultDNSTimeout)
 				defer cancel()
 				ip, err := resolver.ResolveIP(ctx, metadata.Host)
 				if err != nil {
@@ -629,11 +648,11 @@ func ResolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 			}
 		},
 		CheckPassRule: func(adapterName string) bool {
-			adapter, ok := proxies[adapterName]
+			adapter, ok := proxySnapshot[adapterName]
 			if !ok {
 				return false
 			}
-			for a := adapter; a != nil; a = a.Unwrap(metadata, false) {
+			for a, depth := adapter, 0; a != nil && depth < C.UDPAdmissionMaxDepth; a, depth = a.Unwrap(metadata, false), depth+1 {
 				if a.Type() == C.PassRule {
 					return true
 				}
@@ -652,16 +671,19 @@ func ResolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 
 	switch mode {
 	case Direct:
-		proxy = proxies["DIRECT"]
+		proxy = proxySnapshot["DIRECT"]
 	case Global:
-		proxy = proxies["GLOBAL"]
+		proxy = proxySnapshot["GLOBAL"]
 	// Rule
 	default:
-		proxy, rule, err = match(metadata, helper)
+		proxy, rule, err = matchContext(ctx, metadata, helper)
 	}
 	if err == nil && proxy == nil {
 		// Released or not-yet-applied config: there is no adapter to dial.
 		err = errNoRoutingConfig
+	}
+	if err == nil && metadata.NetWork == C.UDP && mode != Rule {
+		proxy, err = admitUDPProxy(ctx, proxy, metadata)
 	}
 	return
 }
@@ -715,15 +737,15 @@ func handleUDPConn(packet C.PacketAdapter) {
 
 			_ = preHandleMetadata(metadata) // error was pre-checked
 
-			proxy, rule, err := ResolveMetadata(metadata)
+			ctx, cancel := context.WithTimeout(context.Background(), C.DefaultUDPTimeout)
+			defer cancel()
+			proxy, rule, err := ResolveMetadataContext(ctx, metadata)
 			if err != nil {
 				log.Warnln("[UDP] Parse metadata failed: %s", err.Error())
 				return nil, nil, err
 			}
 
 			dialMetadata := metadata.Pure()
-			ctx, cancel := context.WithTimeout(context.Background(), C.DefaultUDPTimeout)
-			defer cancel()
 			rawPc, err := retry(ctx, func(ctx context.Context) (C.PacketConn, error) {
 				return proxy.ListenPacketContext(ctx, dialMetadata)
 			}, func(err error) {
@@ -910,10 +932,19 @@ func logMetadata(metadata *C.Metadata, rule C.Rule, remoteConn C.Connection) {
 }
 
 func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, error) {
+	ctx, cancel := C.WithUDPAdmissionBudget(context.Background())
+	defer cancel()
+	return matchContext(ctx, metadata, helper)
+}
+
+func matchContext(ctx context.Context, metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, error) {
 	configMux.RLock()
 	lease := acquireRuleSnapshotLocked()
-	defer lease.Release()
+	proxySnapshot := proxies
+	// Keep the established Rule.Match / reload locking contract; release only
+	// around effectful admission or rematch I/O, using the pinned snapshots.
 	defer configMux.RUnlock()
+	defer lease.Release()
 
 	ruleProviderSnapshot := lease.RuleProviders()
 	helper.LookupRuleProvider = func(name string) (C.RuleProviderMatcher, bool) {
@@ -923,18 +954,28 @@ func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, err
 
 	var rematchChain []string
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		var rematchProxy C.Proxy
 		var rematchRule C.Rule
 	GetRules:
 		for _, rule := range lease.RulesFor(metadata) {
+			if err := ctx.Err(); err != nil {
+				return nil, nil, err
+			}
 			if matched, ada := rule.Match(metadata, helper); matched {
-				adapter, ok := proxies[ada]
+				adapter, ok := proxySnapshot[ada]
 				if !ok {
 					continue
 				}
 
 				// parse multi-layer nesting
-				for adapter := adapter; adapter != nil; adapter = adapter.Unwrap(metadata, false) {
+				for a, depth := adapter, 0; a != nil; a, depth = a.Unwrap(metadata, false), depth+1 {
+					if depth >= C.UDPAdmissionMaxDepth {
+						return nil, rule, C.ErrUDPAdmissionLoop
+					}
+					adapter := a
 					if adapter.Type() == C.Pass {
 						log.Debugln("%s match Pass rule", adapter.Name())
 						continue GetRules
@@ -947,9 +988,17 @@ func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, err
 					}
 				}
 
-				if metadata.NetWork == C.UDP && !adapter.SupportUDP() {
-					log.Debugln("%s UDP is not supported", adapter.Name())
-					continue
+				if metadata.NetWork == C.UDP {
+					configMux.RUnlock()
+					admitted, err := admitUDPProxy(ctx, adapter, metadata)
+					configMux.RLock()
+					if err == C.ErrNotSupport {
+						continue
+					} // legacy/static unsupported only
+					if err != nil {
+						return nil, rule, err
+					} // dynamic failure must not fall through
+					adapter = admitted
 				}
 
 				return adapter, rule, nil
@@ -961,7 +1010,9 @@ func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, err
 				return rematchProxy, rematchRule, nil
 			}
 			rematchChain = append(rematchChain, rematchProxy.Name())
-			conn, err := rematchProxy.DialContext(context.Background(), metadata) // not a real connection, just for metadata update
+			configMux.RUnlock()
+			conn, err := rematchProxy.DialContext(ctx, metadata) // not a real connection, just for metadata update
+			configMux.RLock()
 			if conn != nil {
 				_ = conn.Close()
 			}
@@ -972,7 +1023,7 @@ func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, err
 			log.Debugln("[Rule] rematch proxy %s update metadata to rematch-name=%q sub-rule=%q", rematchProxy.Name(), metadata.InName, metadata.SpecialRules)
 			continue
 		}
-		return proxies["DIRECT"], nil, nil
+		return proxySnapshot["DIRECT"], nil, nil
 	}
 }
 

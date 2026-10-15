@@ -19,7 +19,7 @@ func TestBlackstoneHTTPPolicy(t *testing.T) {
 	hits := 0
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
-		if r.Host != xhttpAPIHost || r.URL.Path != "/api/v3/proxy/config" || r.Header.Get("x-version") != "540" {
+		if r.Host != xhttpAPICDNHost || r.URL.Path != "/api/v3/proxy/config" || r.Header.Get("x-version") != "540" {
 			t.Error("request producer mismatch")
 		}
 		body, _ := io.ReadAll(r.Body)
@@ -51,7 +51,7 @@ func TestBlackstoneHTTPPolicy(t *testing.T) {
 	old := blackstoneAPIClient
 	blackstoneAPIClient = func(d C.Dialer) *http.Client {
 		return &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-			if r.URL.Scheme != "https" || r.URL.Host != xhttpAPIHost {
+			if r.URL.Scheme != "https" || r.URL.Host != xhttpAPICDNHost {
 				t.Error("API does not use canonical TLS hostname")
 			}
 			r.URL.Scheme = "http"

@@ -228,7 +228,7 @@ func TestBlackstoneSharedFlightRealTLS(t *testing.T) {
 			envelope := fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
 			entered, release, serverCanceled, connClosed := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
 			var calls atomic.Int32
-			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
 				_, _ = io.Copy(io.Discard, r.Body)
 				close(entered)
@@ -239,6 +239,7 @@ func TestBlackstoneSharedFlightRealTLS(t *testing.T) {
 					_, _ = io.WriteString(w, `{"data":"`+envelope+`"}`)
 				}
 			}))
+			blackstoneStartLocalTLS(t, server)
 			defer server.Close()
 			defer close(release)
 			old := blackstoneAPIClient
@@ -246,7 +247,7 @@ func TestBlackstoneSharedFlightRealTLS(t *testing.T) {
 			blackstoneAPIClient = func(C.Dialer) *http.Client {
 				tr := xhttpAPITransport(nil)
 				tr.TLSClientConfig = server.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
-				tr.TLSClientConfig.ServerName = "example.com"
+				tr.TLSClientConfig.ServerName = ""
 				tr.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
 					if resolver.InitiatorFrom(ctx) != resolver.InitiatorProxy {
 						t.Error("production transport lost router value")

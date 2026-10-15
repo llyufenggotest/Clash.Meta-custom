@@ -44,6 +44,7 @@ type blackstoneH2Fixture struct {
 	listener                                                    net.Listener
 	roots                                                       *x509.CertPool
 	mode                                                        string
+	expectedHost                                                string
 	response                                                    []byte
 	entered                                                     chan struct{}
 	release                                                     chan struct{}
@@ -55,7 +56,7 @@ type blackstoneH2Fixture struct {
 	dials, verified, headers, complete, wrote, writeErrors, rst atomic.Int32
 }
 
-func blackstoneH2Certificate(t *testing.T, name string) (tls.Certificate, *x509.CertPool) {
+func blackstoneH2Certificate(t *testing.T, name ...string) (tls.Certificate, *x509.CertPool) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -71,7 +72,7 @@ func blackstoneH2Certificate(t *testing.T, name string) (tls.Certificate, *x509.
 	if err != nil {
 		t.Fatal(err)
 	}
-	leaf := &x509.Certificate{SerialNumber: big.NewInt(2), DNSNames: []string{name}, NotBefore: ca.NotBefore, NotAfter: ca.NotAfter, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(2), DNSNames: name, NotBefore: ca.NotBefore, NotAfter: ca.NotAfter, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
 	der, err := x509.CreateCertificate(rand.Reader, leaf, caCert, &key.PublicKey, key)
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +88,7 @@ func newBlackstoneH2Fixture(t *testing.T, mode, certName string, response []byte
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &blackstoneH2Fixture{listener: tls.NewListener(raw, &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{"h2"}}), roots: roots, mode: mode, response: response, entered: make(chan struct{}), release: make(chan struct{})}
+	f := &blackstoneH2Fixture{listener: tls.NewListener(raw, &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{"h2"}}), roots: roots, mode: mode, expectedHost: certName, response: response, entered: make(chan struct{}), release: make(chan struct{})}
 	f.wg.Add(1)
 	go func() {
 		defer f.wg.Done()
@@ -134,7 +135,7 @@ func (f *blackstoneH2Fixture) serve(c *tls.Conn) {
 		return
 	}
 	state := c.ConnectionState()
-	if state.NegotiatedProtocol != "h2" || state.ServerName != xhttpAPIHost {
+	if state.NegotiatedProtocol != "h2" || state.ServerName != f.expectedHost {
 		f.fail(errors.New("production SNI/ALPN changed"))
 		return
 	}
@@ -177,7 +178,7 @@ func (f *blackstoneH2Fixture) serve(c *tls.Conn) {
 			for _, h := range v.Fields {
 				headers[h.Name] = h.Value
 			}
-			if headers[":method"] != "POST" || headers[":authority"] != xhttpAPIHost || headers[":scheme"] != "https" || headers[":path"] != "/api/v3/proxy/config" || headers["content-type"] != "application/json" || headers["x-version"] != "540" || headers["x-platform"] != "android" || headers["user-agent"] != "okhttp/4.9.2" || headers["accept-language"] != "zh_CN" || headers["idempotency-key"] != "" {
+			if headers[":method"] != "POST" || headers[":authority"] != f.expectedHost || headers[":scheme"] != "https" || headers[":path"] != "/api/v3/proxy/config" || headers["content-type"] != "application/json" || headers["x-version"] != "540" || headers["x-platform"] != "android" || headers["user-agent"] != "okhttp/4.9.2" || headers["accept-language"] != "zh_CN" || headers["idempotency-key"] != "" {
 				f.fail(errors.New("production HTTP/2 request headers changed"))
 				return
 			}
@@ -343,7 +344,7 @@ func blackstoneH2Log(t *testing.T, f *blackstoneH2Fixture) {
 // RED on the immutable parent: one production fetch emits two complete POSTs.
 // No RoundTripper seam edits GetBody or Body in this regression.
 func TestBlackstoneH2RefusedStreamDoesNotReplayPOST(t *testing.T) {
-	f := newBlackstoneH2Fixture(t, "refused", xhttpAPIHost, nil)
+	f := newBlackstoneH2Fixture(t, "refused", xhttpAPICDNHost, nil)
 	f.install(t)
 	h := blackstoneH2Adapter(t)
 	_, err := h.fetchDynamicConfig(f.ctx(context.Background()), "synthetic-node", "synthetic-token")
@@ -355,7 +356,7 @@ func TestBlackstoneH2RefusedStreamDoesNotReplayPOST(t *testing.T) {
 	if counts.Complete != 1 || counts.Headers != 1 || counts.Wrote != 1 || counts.TLS != 1 {
 		t.Fatalf("already emitted POST replayed: %+v", counts)
 	}
-	if strings.Contains(err.Error(), "synthetic-") || strings.Contains(err.Error(), xhttpAPIHost) {
+	if strings.Contains(err.Error(), "synthetic-") || strings.Contains(err.Error(), xhttpAPICDNHost) {
 		t.Fatal("public diagnostic leaked private material")
 	}
 }
@@ -365,7 +366,7 @@ func TestBlackstoneH2Boundaries(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			h := blackstoneH2Adapter(t)
 			envelope := fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
-			f := newBlackstoneH2Fixture(t, mode, xhttpAPIHost, []byte(`{"data":"`+envelope+`"}`))
+			f := newBlackstoneH2Fixture(t, mode, xhttpAPICDNHost, []byte(`{"data":"`+envelope+`"}`))
 			f.install(t)
 			configs, err := h.fetchDynamicConfig(f.ctx(context.Background()), "synthetic-node", "synthetic-token")
 			blackstoneH2Log(t, f)
@@ -416,7 +417,7 @@ func TestBlackstoneH2FlightCancellation(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			h := blackstoneH2Adapter(t)
 			envelope := fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
-			f := newBlackstoneH2Fixture(t, mode, xhttpAPIHost, []byte(`{"data":"`+envelope+`"}`))
+			f := newBlackstoneH2Fixture(t, mode, xhttpAPICDNHost, []byte(`{"data":"`+envelope+`"}`))
 			f.install(t)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -468,7 +469,7 @@ func TestBlackstoneH2FlightCancellation(t *testing.T) {
 func TestBlackstoneH2CanceledAfterResponseCannotPublish(t *testing.T) {
 	h := blackstoneH2Adapter(t)
 	envelope := fixtureBlackstoneEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n")
-	f := newBlackstoneH2Fixture(t, "normal", xhttpAPIHost, []byte(`{"data":"`+envelope+`"}`))
+	f := newBlackstoneH2Fixture(t, "normal", xhttpAPICDNHost, []byte(`{"data":"`+envelope+`"}`))
 	f.install(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -498,7 +499,7 @@ func TestBlackstoneH2CanceledAfterResponseCannotPublish(t *testing.T) {
 }
 
 func TestBlackstoneH2FlightPolicyTimeout(t *testing.T) {
-	f := newBlackstoneH2Fixture(t, "policy-timeout", xhttpAPIHost, nil)
+	f := newBlackstoneH2Fixture(t, "policy-timeout", xhttpAPICDNHost, nil)
 	f.install(t)
 	h := blackstoneH2Adapter(t)
 	start := time.Now()
@@ -515,7 +516,7 @@ func TestBlackstoneH2FlightPolicyTimeout(t *testing.T) {
 }
 
 func TestBlackstoneH2WriteFaultBeforePOST(t *testing.T) {
-	f := newBlackstoneH2Fixture(t, "normal", xhttpAPIHost, nil)
+	f := newBlackstoneH2Fixture(t, "normal", xhttpAPICDNHost, nil)
 	h := blackstoneH2Adapter(t)
 	old := blackstoneAPIClient
 	var armed atomic.Bool

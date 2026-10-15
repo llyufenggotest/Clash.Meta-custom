@@ -46,6 +46,8 @@ var (
 
 const (
 	xhttpAPIHost             = "g.just4test.xyz"
+	xhttpAPICDNHost          = "cdn.heysocks.life"
+	xhttpCDNConnectTimeout   = 4 * time.Second
 	xhttpAPIIP               = "104.21.41.69"
 	xhttpMaxAPIResponseBytes = 8 << 20
 	xhttpMaxPlaintextBytes   = 16 << 20
@@ -607,6 +609,137 @@ var blackstoneAPIClient = func(dialer C.Dialer) *http.Client {
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
+// blackstoneOriginAttempt is separate from diagnostic traces: only the owned
+// DialContext boundary can prove that no socket was returned to the transport.
+// All observations are monotonic and synchronized; late/parallel H2 callbacks
+// or a remote-proxy DNS error after GotConn can only revoke fallback permission.
+// A dial still running when Do returns is deliberately not safe to retry.
+type blackstoneOriginAttempt struct {
+	mu                            sync.Mutex
+	active, failed                int
+	unsafe, sealed, wrotePossible bool
+}
+
+type blackstoneOriginAttemptKey struct{}
+
+func (a *blackstoneOriginAttempt) possibleWrite() {
+	a.mu.Lock()
+	a.wrotePossible = true
+	a.mu.Unlock()
+}
+func (a *blackstoneOriginAttempt) trace() *httptrace.ClientTrace {
+	return &httptrace.ClientTrace{
+		GotConn:          func(httptrace.GotConnInfo) { a.possibleWrite() },
+		WroteHeaderField: func(string, []string) { a.possibleWrite() },
+		WroteHeaders:     a.possibleWrite,
+		WroteRequest:     func(httptrace.WroteRequestInfo) { a.possibleWrite() },
+	}
+}
+func blackstonePreconnectError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	var cert *tls.CertificateVerificationError
+	if errors.As(err, &cert) {
+		return false
+	}
+	var dns *net.DNSError
+	if errors.As(err, &dns) || errors.Is(err, resolver.ErrIPNotFound) || errors.Is(err, resolver.ErrIPVersion) || errors.Is(err, resolver.ErrIPv6Disabled) {
+		return true
+	}
+	var op *net.OpError
+	if !errors.As(err, &op) || op.Op != "dial" {
+		return false
+	}
+	// Do not treat arbitrary proxy/TLS/business errors wrapped by a dialer as
+	// connect failures. Only recognized socket-connect errors are admitted.
+	for _, cause := range []error{syscall.ECONNREFUSED, syscall.ENETUNREACH, syscall.EHOSTUNREACH, syscall.ECONNRESET, syscall.ETIMEDOUT,
+		syscall.Errno(10061), syscall.Errno(10051), syscall.Errno(10065), syscall.Errno(10054), syscall.Errno(10060)} {
+		if errors.Is(err, cause) {
+			return true
+		}
+	}
+	return false
+}
+func (a *blackstoneOriginAttempt) dial(ctx context.Context, n, addr string, dial func(context.Context, string, string) (net.Conn, error)) (net.Conn, error) {
+	a.mu.Lock()
+	if a.sealed {
+		a.mu.Unlock()
+		return nil, context.Canceled
+	}
+	a.active++
+	a.mu.Unlock()
+	// Bound DNS/connect only, leaving TLS/response on the shared 15s deadline.
+	dialCtx, cancel := context.WithTimeout(ctx, xhttpCDNConnectTimeout)
+	defer cancel()
+	conn, err := dial(dialCtx, n, addr)
+	safe := conn == nil && (blackstonePreconnectError(err) ||
+		(errors.Is(err, context.DeadlineExceeded) && dialCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil))
+	a.mu.Lock()
+	a.active--
+	if conn != nil {
+		a.wrotePossible = true
+	}
+	if safe {
+		a.failed++
+	} else {
+		a.unsafe = true
+	}
+	sealed := a.sealed
+	a.mu.Unlock()
+	if sealed && conn != nil {
+		_ = conn.Close()
+		return nil, context.Canceled
+	}
+	return conn, err
+}
+func (a *blackstoneOriginAttempt) finish(ctx context.Context) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.sealed {
+		return false
+	}
+	a.sealed = true
+	return ctx.Err() == nil && a.active == 0 && a.failed > 0 && !a.unsafe && !a.wrotePossible
+}
+
+// Preserve the existing client seam and legacy transport's fixed old-host SNI.
+// Only canonical requests derive SNI from their URL. Clone before editing so
+// fixture/shared transports and the isolated legacy IP+Host contract stay intact.
+func blackstoneAPIOriginClient(dialer C.Dialer, host string, attempt *blackstoneOriginAttempt) *http.Client {
+	base := blackstoneAPIClient(dialer)
+	client := *base
+	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
+	if host != "" {
+		if original, ok := client.Transport.(*http.Transport); ok {
+			tr := original.Clone()
+			if tr.TLSClientConfig == nil {
+				tr.TLSClientConfig = &tls.Config{}
+			}
+			tr.TLSClientConfig.ServerName = host
+			dial := tr.DialContext
+			if dial == nil {
+				dial = (&net.Dialer{}).DialContext
+			}
+			if tr.DialTLSContext == nil && tr.DialTLS == nil {
+				tr.DialContext = func(ctx context.Context, n, addr string) (net.Conn, error) {
+					// net/http may detach a dial's cancellation. Require the fetch
+					// attempt context so abandoned dials cannot outlive the budget.
+					if owner, ok := ctx.Value(blackstoneOriginAttemptKey{}).(context.Context); ok {
+						ctx = owner
+					}
+					if attempt != nil {
+						return attempt.dial(ctx, n, addr, dial)
+					}
+					return dial(ctx, n, addr)
+				}
+			}
+			client.Transport = tr
+		}
+	}
+	return &client
+}
+
 // blackstoneFailure hides the original transport/parser text while preserving its
 // error chain. Never serialize cause: url.Error, x509 and YAML errors contain private data.
 type blackstoneFailure struct {
@@ -767,6 +900,9 @@ func blackstoneReportFailure(err error) {
 }
 
 func (h *XHttp) fetchDynamicConfig(ctx context.Context, nodeID, token string) (configs []xhttpRealConfig, resultErr error) {
+	// One aggregate budget, including callers outside the lazy-init flight.
+	ctx, cancel := context.WithTimeout(ctx, xhttpInitTimeout)
+	defer cancel()
 	trace := &blackstoneControlTrace{stage: "connect", last: "none"}
 	status, business := 0, "unknown"
 	defer func() {
@@ -798,7 +934,7 @@ func (h *XHttp) fetchDynamicConfig(ctx context.Context, nodeID, token string) (c
 	url := fmt.Sprintf("https://%s/api/v3/proxy/config", xhttpAPIIP)
 	deviceContext := h.option != nil && h.option.DeviceID != "" && h.option.DeviceName != ""
 	if deviceContext {
-		url = "https://" + xhttpAPIHost + "/api/v3/proxy/config"
+		url = "https://" + xhttpAPICDNHost + "/api/v3/proxy/config"
 	}
 
 	reqMap := map[string]interface{}{
@@ -824,6 +960,9 @@ func (h *XHttp) fetchDynamicConfig(ctx context.Context, nodeID, token string) (c
 	// may still replace an unusable connection before writing the request.
 	req.GetBody = nil
 	req.Host = xhttpAPIHost
+	if deviceContext {
+		req.Host = xhttpAPICDNHost
+	}
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("x-version", "520")
 	req.Header.Set("x-platform", "android")
@@ -835,13 +974,35 @@ func (h *XHttp) fetchDynamicConfig(ctx context.Context, nodeID, token string) (c
 		req.Header.Set("accept-language", "zh_CN")
 	}
 
-	client := blackstoneAPIClient(h.dialer)
-	// Both canonical and legacy requests carry private x-header material.
-	// Never replay it to a redirected origin; share the bounded client policy.
-
-	// The client/transport is scoped to this fetch, not shared by later retries.
+	var attempt *blackstoneOriginAttempt
+	originHost := "" // The legacy IP+Host/SNI path is intentionally unchanged.
+	if deviceContext {
+		originHost = xhttpAPICDNHost
+		attempt = &blackstoneOriginAttempt{}
+		attemptCtx := httptrace.WithClientTrace(ctx, attempt.trace())
+		attemptCtx = context.WithValue(attemptCtx, blackstoneOriginAttemptKey{}, attemptCtx)
+		req = req.WithContext(attemptCtx)
+	}
+	client := blackstoneAPIOriginClient(h.dialer, originHost, attempt)
 	defer client.CloseIdleConnections()
 	resp, err := client.Do(req)
+	safeFallback := false
+	if attempt != nil {
+		safeFallback = attempt.finish(ctx)
+	}
+	if err != nil && safeFallback && ctx.Err() == nil {
+		// Only an owned DNS/connect failure with no returned connection can
+		// reach here. Build a new non-rewindable request; never infer safety
+		// from error text or the diagnostic trace's furthest milestone.
+		client.CloseIdleConnections()
+		fallback := req.Clone(context.WithValue(ctx, blackstoneOriginAttemptKey{}, ctx))
+		fallback.URL.Host, fallback.Host = xhttpAPIHost, xhttpAPIHost
+		fallback.Body = io.NopCloser(bytes.NewReader(payloadJson))
+		fallback.GetBody = nil
+		oldClient := blackstoneAPIOriginClient(h.dialer, xhttpAPIHost, nil)
+		defer oldClient.CloseIdleConnections()
+		resp, err = oldClient.Do(fallback)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("api request failed: %w", err)
 	}

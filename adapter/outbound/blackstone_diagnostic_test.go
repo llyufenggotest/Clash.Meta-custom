@@ -32,7 +32,7 @@ func blackstoneLocalTLSClient(t *testing.T, server *httptest.Server, verified bo
 		}
 		if verified {
 			tr.TLSClientConfig = server.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
-			tr.TLSClientConfig.ServerName = "example.com"
+			tr.TLSClientConfig.ServerName = xhttpAPIHost
 		}
 		return &http.Client{Transport: tr, Timeout: time.Second, CheckRedirect: old(nil).CheckRedirect}
 	}
@@ -43,7 +43,7 @@ func TestBlackstoneDiagnosticRealTLSCertificate(t *testing.T) {
 	var hits atomic.Int32
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
 	server.Config.ErrorLog = log.New(io.Discard, "", 0)
-	server.StartTLS()
+	blackstoneStartLocalTLS(t, server)
 	defer server.Close()
 	blackstoneLocalTLSClient(t, server, false)
 	h, _ := NewXHttp(XHttpOption{DeviceID: "fixture-device", DeviceName: "fixture-name"})
@@ -103,7 +103,7 @@ func TestBlackstoneDiagnosticRealBodyReset(t *testing.T) {
 		_ = conn.Close()
 	}))
 	server.Config.ErrorLog = log.New(io.Discard, "", 0)
-	server.StartTLS()
+	blackstoneStartLocalTLS(t, server)
 	defer server.Close()
 	blackstoneLocalTLSClient(t, server, true)
 	h, _ := NewXHttp(XHttpOption{DeviceID: "fixture-device", DeviceName: "fixture-name"})
@@ -194,7 +194,8 @@ func TestBlackstoneDiagnosticCauseAndStage(t *testing.T) {
 }
 
 func TestBlackstoneDiagnosticRealWriteReset(t *testing.T) {
-	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	blackstoneStartLocalTLS(t, server)
 	defer server.Close()
 	old := blackstoneAPIClient
 	defer func() { blackstoneAPIClient = old }()
@@ -202,7 +203,7 @@ func TestBlackstoneDiagnosticRealWriteReset(t *testing.T) {
 	blackstoneAPIClient = func(C.Dialer) *http.Client {
 		tr := xhttpAPITransport(nil)
 		tr.TLSClientConfig = server.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
-		tr.TLSClientConfig.ServerName = "example.com"
+		tr.TLSClientConfig.ServerName = xhttpAPIHost
 		tr.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
 			c, e := (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
 			if e != nil {
@@ -237,7 +238,7 @@ func (c *blackstoneWriteFaultConn) Write(b []byte) (int, error) {
 }
 
 func TestBlackstoneDiagnosticRealResponseReset(t *testing.T) {
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		c, _, e := w.(http.Hijacker).Hijack()
 		if e != nil {
@@ -248,6 +249,7 @@ func TestBlackstoneDiagnosticRealResponseReset(t *testing.T) {
 		_ = raw.SetLinger(0)
 		_ = raw.Close()
 	}))
+	blackstoneStartLocalTLS(t, server)
 	defer server.Close()
 	blackstoneLocalTLSClient(t, server, true)
 	h, _ := NewXHttp(XHttpOption{DeviceID: "synthetic", DeviceName: "synthetic"})
@@ -284,7 +286,7 @@ func TestBlackstoneDiagnosticPublicEntriesTLSAndLegacyPolicy(t *testing.T) {
 			var hits atomic.Int32
 			server := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
 			server.Config.ErrorLog = log.New(io.Discard, "", 0)
-			server.StartTLS()
+			blackstoneStartLocalTLS(t, server)
 			defer server.Close()
 			blackstoneLocalTLSClient(t, server, false)
 			option := XHttpOption{DeviceID: "synthetic", DeviceName: "synthetic"}
@@ -309,11 +311,12 @@ func TestBlackstoneDiagnosticPublicEntriesTLSAndLegacyPolicy(t *testing.T) {
 			sink := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { sinkHits.Add(1) }))
 			defer sink.Close()
 			var hits atomic.Int32
-			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				hits.Add(1)
 				w.Header().Set("Location", sink.URL)
 				w.WriteHeader(http.StatusTemporaryRedirect)
 			}))
+			blackstoneStartLocalTLS(t, server)
 			defer server.Close()
 			blackstoneLocalTLSClient(t, server, true)
 			option := XHttpOption{DeviceID: "synthetic", DeviceName: "synthetic"}

@@ -44,10 +44,11 @@ type DstAddr struct {
 
 // Client is vless connection generator
 type Client struct {
-	uuid   uuid.UUID
-	Addons *Addons
-	IsX365 bool // ✨魔改新增
-	mode   PrivateMode
+	uuid       uuid.UUID
+	Addons     *Addons
+	IsX365     bool // ✨魔改新增
+	mode       PrivateMode
+	blackstone *blackstoneState
 }
 
 // StreamConn return a Conn with net.Conn and DstAddr
@@ -84,6 +85,9 @@ func NewClient(uuidStr string, addons *Addons, isX365 bool) (*Client, error) { /
 	cleanID, mode, err := parsePrivateUUID(uuidStr)
 	if err != nil {
 		return nil, err
+	}
+	if mode == ModeBlackstone {
+		return nil, fmt.Errorf("Blackstone: explicit E/H configuration required; X365 cannot be combined")
 	}
 	if mode == ModeX365 {
 		isX365 = true

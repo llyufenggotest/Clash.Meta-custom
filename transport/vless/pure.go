@@ -16,10 +16,21 @@ const (
 	ModeX365
 	ModeJuzi
 	ModePure
+	ModeBlackstone
 )
 
 func parsePrivateUUID(value string) (id string, mode PrivateMode, err error) {
 	lower := strings.ToLower(value)
+	if strings.Contains(lower, "#blackstone") {
+		if !strings.HasSuffix(value, "#blackstone") || strings.Count(value, "#") != 1 {
+			return "", ModeBlackstone, fmt.Errorf("Blackstone: one exact lowercase suffix required")
+		}
+		id = strings.TrimSuffix(value, "#blackstone")
+		if !(canonicalUUID(id) && strings.Count(id, "-") == 4) && !blackstoneCompactUUID(id) {
+			return "", ModeBlackstone, fmt.Errorf("Blackstone: canonical or 32-hex UUID required")
+		}
+		return id, ModeBlackstone, nil
+	}
 	if strings.Contains(lower, "#pure") {
 		if !strings.HasSuffix(lower, "#pure") || strings.Contains(lower[:len(lower)-len("#pure")], "#juzi") || strings.Contains(value[:len(value)-len("#pure")], "#x365") {
 			return "", ModePure, fmt.Errorf("private protocol markers must be one exact suffix")

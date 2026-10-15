@@ -79,10 +79,13 @@ type Vless struct {
 
 type VlessOption struct {
 	BasicOption
-	Name              string            `proxy:"name"`
-	Server            string            `proxy:"server"`
-	Port              int               `proxy:"port"`
-	UUID              string            `proxy:"uuid"`
+	Name   string `proxy:"name"`
+	Server string `proxy:"server"`
+	Port   int    `proxy:"port"`
+	UUID   string `proxy:"uuid"`
+	// E/H apply only to the exact UUID#blackstone private selector.
+	E                 bool              `proxy:"e,omitempty"`
+	H                 string            `proxy:"h,omitempty"`
 	Flow              string            `proxy:"flow,omitempty"`
 	TLS               bool              `proxy:"tls,omitempty"`
 	ALPN              []string          `proxy:"alpn,omitempty"`
@@ -547,7 +550,7 @@ func NewVless(option VlessOption) (*Vless, error) {
 	}
 
 	// ⚠️ 注意：这里多传了一个 isX365
-	client, err := vless.NewClient(option.UUID, addons, isX365)
+	client, err := vless.NewClientWithBlackstoneOptions(option.UUID, addons, isX365, option.E, option.H)
 	if err != nil {
 		return nil, err
 	}

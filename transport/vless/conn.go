@@ -2,6 +2,7 @@ package vless
 
 import (
 	"crypto/hmac"
+	"crypto/md5"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -18,13 +19,14 @@ import (
 
 type Conn struct {
 	N.ExtendedConn
-	dst      *DstAddr
-	id       uuid.UUID
-	addons   *Addons
-	received bool
-	sent     bool
-	isX365   bool // ✨新增
-	isJuzi   bool
+	dst        *DstAddr
+	id         uuid.UUID
+	addons     *Addons
+	received   bool
+	sent       bool
+	isX365     bool // ✨新增
+	isJuzi     bool
+	blackstone *blackstoneState
 }
 
 func (vc *Conn) Read(b []byte) (int, error) {
@@ -122,6 +124,17 @@ func (vc *Conn) sendRequest(p []byte) (err error) {
 		}
 	}
 
+	// Capture one coherent current H at first write. Response updates on other
+	// streams may replace the per-client cache concurrently.
+	var privateHeader []byte
+	if vc.blackstone != nil {
+		if vc.blackstone.extension {
+			digest := md5.Sum(vc.id[:]) // protocol compatibility, not a security primitive
+			privateHeader = append(privateHeader, digest[:]...)
+		}
+		privateHeader = append(privateHeader, vc.blackstone.snapshot()...)
+	}
+
 	requestLen := 1  // protocol version
 	requestLen += 16 // UUID
 	if vc.isJuzi {
@@ -129,6 +142,7 @@ func (vc *Conn) sendRequest(p []byte) (err error) {
 	}
 	requestLen += 1 // addons length
 	requestLen += len(addonsBytes)
+	requestLen += len(privateHeader)
 	requestLen += 1 // command
 	if !vc.dst.Mux {
 		requestLen += 2 // port
@@ -171,10 +185,14 @@ func (vc *Conn) sendRequest(p []byte) (err error) {
 		)
 	}
 
+	buf.Must(buf.Error(buffer.Write(privateHeader)))
 	buf.Must(buf.Error(buffer.Write(p)))
 
-	_, err = vc.ExtendedConn.Write(buffer.Bytes())
-	return
+	n, writeErr := vc.ExtendedConn.Write(buffer.Bytes())
+	if writeErr == nil && vc.blackstone != nil && n != buffer.Len() {
+		writeErr = io.ErrShortWrite
+	}
+	return writeErr
 }
 
 func (vc *Conn) recvResponse() (err error) {
@@ -204,7 +222,24 @@ func (vc *Conn) recvResponse() (err error) {
 
 	length := int64(buffer[1])
 	if length != 0 { // addon data length > 0
-		io.CopyN(io.Discard, vc.ExtendedConn, length) // just discard
+		_, discardErr := io.CopyN(io.Discard, vc.ExtendedConn, length)
+		if vc.blackstone != nil && discardErr != nil {
+			return discardErr
+		}
+	}
+	if vc.blackstone != nil && len(vc.blackstone.snapshot()) != 0 {
+		var size [1]byte
+		if _, err := io.ReadFull(vc.ExtendedConn, size[:]); err != nil {
+			return err
+		}
+		if size[0] != 0 {
+			updated := make([]byte, 1+int(size[0]))
+			updated[0] = size[0]
+			if _, err := io.ReadFull(vc.ExtendedConn, updated[1:]); err != nil {
+				return err // never publish a partial response
+			}
+			vc.blackstone.replace(updated)
+		}
 	}
 
 	return
@@ -235,6 +270,7 @@ func newConn(conn net.Conn, client *Client, dst *DstAddr) (net.Conn, error) {
 		dst:          dst,
 		isX365:       client.IsX365, // ✨赋值
 		isJuzi:       client.mode == ModeJuzi,
+		blackstone:   client.blackstone,
 	}
 
 	if client.Addons != nil {

@@ -111,7 +111,7 @@ func TestBlackstoneSelectionRejectsUnprovedMembership(t *testing.T) {
 }
 
 func TestBlackstoneSelectionUnsupportedMemberFailsWholeResponse(t *testing.T) {
-	for _, typ := range []string{"vless", "os", "future", ""} {
+	for _, typ := range []string{"future-vless-successor", "os", "future", ""} {
 		t.Run("type-"+typ, func(t *testing.T) {
 			d := selectionDocument(t)
 			d["proxies"].([]any)[0].(map[string]any)["type"] = typ

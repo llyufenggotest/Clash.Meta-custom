@@ -157,6 +157,10 @@ func blackstoneValidateYAML(n *yaml.Node, depth int) error {
 // substitute a different member. Certificate payloads are validated after decrypt.
 func blackstoneValidateSelectedProxy(p map[string]any) error {
 	// Legacy "os" coercion is not evidence of device-contract capability.
+	if p["type"] == "vless" {
+		_, err := parseBlackstoneVless(p)
+		return err
+	}
 	if p["type"] != "xhttp" && p["type"] != "ss" {
 		return blackstoneSelectionCapability("unknown")
 	}

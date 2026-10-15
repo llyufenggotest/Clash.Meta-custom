@@ -126,7 +126,7 @@ func TestBlackstoneSelectionRuntimeOffline(t *testing.T) {
 		converted, conversionErr := (&XHttp{}).processBlackstoneSelectionData(fixtureBlackstoneEnvelope(t, &XHttp{}, string(b)), true)
 		unsupported := false
 		for _, p := range selected {
-			if p["type"] != "xhttp" && p["type"] != "ss" {
+			if p["type"] != "xhttp" && p["type"] != "ss" && p["type"] != "vless" {
 				unsupported = true
 			}
 		}

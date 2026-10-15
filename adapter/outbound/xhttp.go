@@ -64,6 +64,7 @@ type xhttpRealConfig struct {
 	UDPOverTCP        bool
 	UDPOverTCPVersion int
 	PaddingLen        string
+	vlessOption       *VlessOption
 }
 
 // XHttpConn retains the existing instrumentation type name; wire ownership lives
@@ -92,7 +93,11 @@ type XHttp struct {
 	bestCfg    xhttpRealConfig
 	lastFetch  time.Time
 	ssOutbound C.ProxyAdapter
-	transport  *blackstone.Client
+	// Retain retired delegates until Close: in-flight old-generation streams
+	// must keep their own transport/cache while refresh publishes a new one.
+	delegates []C.ProxyAdapter
+	closed    bool
+	transport *blackstone.Client
 
 	// Only URLTest bypasses dialer-proxy and API dialer overrides. Control,
 	// ping-race and data traffic retain the original Base.dialer.
@@ -316,6 +321,9 @@ func (h *XHttp) runInitFlight(flight *xhttpInitFlight) {
 	}
 	if h.initFlight == flight {
 		if err == nil {
+			if h.ssOutbound != nil {
+				h.delegates = append(h.delegates, h.ssOutbound)
+			}
 			h.bestCfg, h.ssOutbound = best, ss
 			h.transport = nil
 			h.isInit, h.lastFetch = true, time.Now()
@@ -379,13 +387,31 @@ func (h *XHttp) initialize(ctx context.Context) (xhttpRealConfig, C.ProxyAdapter
 		return xhttpRealConfig{}, nil, blackstoneStageError("node-selection", errors.New("no target node matched"))
 	}
 
+	// Prove every selected VLESS constructor before latency can hide a bad leaf.
+	// Other transport capability checks are owned by the selection fix slice.
+	for _, cfg := range matchedConfigs {
+		if cfg.Type == "vless" {
+			delegate, err := h.newBlackstoneVless(cfg)
+			if err != nil {
+				return xhttpRealConfig{}, nil, err
+			}
+			if err := delegate.Close(); err != nil {
+				return xhttpRealConfig{}, nil, blackstoneStageError("node-capability", err)
+			}
+		}
+	}
 	best, err := h.pingRace(apiCtx, matchedConfigs)
 	if err != nil {
 		return xhttpRealConfig{}, nil, blackstoneStageError("node-selection", err)
 	}
 
 	var ss C.ProxyAdapter
-	if best.Type == "ss" {
+	if best.Type == "vless" {
+		ss, err = h.newBlackstoneVless(best)
+		if err != nil {
+			return xhttpRealConfig{}, nil, err
+		}
+	} else if best.Type == "ss" {
 		if h.blackstoneDeviceContext() {
 			ss, err = blackstoneSelectedSS(best, h.option.BasicOption, h.option.Name+"_ss")
 			if err != nil {
@@ -587,19 +613,27 @@ func (x *XHttpProxyWrapper) AdmitUDP(ctx context.Context, metadata *C.Metadata) 
 
 func (h *XHttp) Close() error {
 	h.initMu.Lock()
+	if h.closed {
+		h.initMu.Unlock()
+		return nil
+	}
 	h.closed = true
 	h.isInit = false
 	if h.initFlight != nil {
 		h.initFlight.cancel()
 		h.initFlight = nil
 	}
-	ss := h.ssOutbound
-	h.ssOutbound = nil
-	h.initMu.Unlock()
-	if ss != nil {
-		return ss.Close()
+	delegates := h.delegates
+	if h.ssOutbound != nil {
+		delegates = append(delegates, h.ssOutbound)
 	}
-	return nil
+	h.delegates, h.ssOutbound = nil, nil
+	h.initMu.Unlock()
+	var errs []error
+	for _, delegate := range delegates {
+		errs = append(errs, delegate.Close())
+	}
+	return errors.Join(errs...)
 }
 
 // ========================
@@ -1186,6 +1220,12 @@ func (h *XHttp) processBlackstoneSelectionData(encryptedB64 string, exact bool) 
 				Port:     fmt.Sprintf("%v", proxy["port"]),
 				Password: fmt.Sprintf("%v", proxy["password"]),
 				Cipher:   cipherStr,
+			}
+			realConfigs = append(realConfigs, cfg)
+		} else if pType == "vless" {
+			cfg, err := parseBlackstoneVless(proxy)
+			if err != nil {
+				return nil, err
 			}
 			realConfigs = append(realConfigs, cfg)
 		} else if pType == "xhttp" {

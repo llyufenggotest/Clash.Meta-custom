@@ -446,6 +446,11 @@ func (h *XHttp) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, 
 		return nil, err
 	}
 	if ss != nil {
+		if best.Type == "vless" {
+			if v, ok := ss.(*Vless); ok {
+				return v.dialBlackstoneContext(ctx, metadata)
+			}
+		}
 		return ss.DialContext(ctx, metadata)
 	}
 	dest := M.ParseSocksaddr(metadata.RemoteAddress())
@@ -534,6 +539,11 @@ func (h *XHttp) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (
 	if ss != nil {
 		if !ss.SupportUDP() {
 			return nil, C.ErrNotSupport
+		}
+		if best.Type == "vless" {
+			if v, ok := ss.(*Vless); ok {
+				return v.listenBlackstoneContext(ctx, metadata)
+			}
 		}
 		return ss.ListenPacketContext(ctx, metadata)
 	}
@@ -978,6 +988,10 @@ func (h *XHttp) fetchDynamicConfig(ctx context.Context, nodeID, token string) (c
 		if resultErr == nil {
 			return
 		}
+		var vlessSafe *blackstoneVlessFailure
+		if errors.As(resultErr, &vlessSafe) {
+			return // Already a private-free dynamic node-capability failure.
+		}
 		trace.mu.Lock()
 		stage, last := trace.stage, trace.last
 		trace.mu.Unlock()
@@ -1120,7 +1134,8 @@ func (h *XHttp) processBlackstoneSelectionData(encryptedB64 string, exact bool) 
 			return
 		}
 		var safe *blackstoneFailure
-		if !errors.As(resultErr, &safe) {
+		var vlessSafe *blackstoneVlessFailure
+		if !errors.As(resultErr, &safe) && !errors.As(resultErr, &vlessSafe) {
 			resultErr = blackstoneStageError(stage, resultErr)
 		}
 	}()

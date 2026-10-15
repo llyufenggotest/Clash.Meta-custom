@@ -107,9 +107,9 @@ func blackstoneOriginTrust(t *testing.T, roots *x509.CertPool) {
 func TestBlackstoneOriginVerifiedTLS(t *testing.T) {
 	h := blackstoneH2Adapter(t)
 	body := `{"data":"` + fixtureBlackstoneRoutedEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n") + `"}`
-	hits := 0
+	var hits atomic.Int32
 	s, roots := blackstoneOriginServer(t, blackstoneTestCDN, func(w http.ResponseWriter, r *http.Request) {
-		hits++
+		hits.Add(1)
 		if r.Host != blackstoneTestCDN || r.TLS.ServerName != blackstoneTestCDN {
 			t.Error("Host and SNI diverged from CDN URL")
 		}
@@ -121,8 +121,8 @@ func TestBlackstoneOriginVerifiedTLS(t *testing.T) {
 	}}
 	h.dialer = d
 	cfg, err := h.fetchDynamicConfig(context.Background(), "synthetic-node", "synthetic-token")
-	if err != nil || len(cfg) != 1 || hits != 1 || !reflect.DeepEqual(d.got(), []string{blackstoneTestCDN + ":443"}) {
-		t.Fatalf("production CDN fetch failed: %v hits=%d dials=%v", err, hits, d.got())
+	if err != nil || len(cfg) != 1 || hits.Load() != 1 || !reflect.DeepEqual(d.got(), []string{blackstoneTestCDN + ":443"}) {
+		t.Fatalf("production CDN fetch failed: %v hits=%d dials=%v", err, hits.Load(), d.got())
 	}
 }
 
@@ -157,10 +157,10 @@ func TestBlackstoneOriginSafeFallback(t *testing.T) {
 	for name, failure := range failures {
 		t.Run(name, func(t *testing.T) {
 			h := blackstoneH2Adapter(t)
-			hits := 0
+			var hits atomic.Int32
 			body := `{"data":"` + fixtureBlackstoneRoutedEnvelope(t, h, "proxies:\n - {name: synthetic, type: xhttp, server: 127.0.0.1, port: 443, password: 'synthetic:00'}\n") + `"}`
 			s, roots := blackstoneOriginServer(t, xhttpAPIHost, func(w http.ResponseWriter, r *http.Request) {
-				hits++
+				hits.Add(1)
 				if r.Host != xhttpAPIHost || r.TLS.ServerName != xhttpAPIHost {
 					t.Error("fallback URL/Host/SNI mismatch")
 				}
@@ -175,8 +175,8 @@ func TestBlackstoneOriginSafeFallback(t *testing.T) {
 			}}
 			h.dialer = d
 			cfg, err := h.fetchDynamicConfig(context.Background(), "synthetic-node", "synthetic-token")
-			if err != nil || len(cfg) != 1 || hits != 1 || !reflect.DeepEqual(d.got(), []string{blackstoneTestCDN + ":443", xhttpAPIHost + ":443"}) {
-				t.Fatalf("safe prewrite fallback failed: %v hits=%d dials=%v", err, hits, d.got())
+			if err != nil || len(cfg) != 1 || hits.Load() != 1 || !reflect.DeepEqual(d.got(), []string{blackstoneTestCDN + ":443", xhttpAPIHost + ":443"}) {
+				t.Fatalf("safe prewrite fallback failed: %v hits=%d dials=%v", err, hits.Load(), d.got())
 			}
 		})
 	}
@@ -188,13 +188,13 @@ func TestBlackstoneOriginNoFallback(t *testing.T) {
 			h := blackstoneH2Adapter(t)
 			ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 			defer cancel()
-			hits := 0
+			var hits atomic.Int32
 			certName := blackstoneTestCDN
 			if mode == "tls-identity" {
 				certName = "synthetic-wrong.invalid"
 			}
 			s, roots := blackstoneOriginServer(t, certName, func(w http.ResponseWriter, r *http.Request) {
-				hits++
+				hits.Add(1)
 				_, _ = io.Copy(io.Discard, r.Body)
 				switch mode {
 				case "401":
@@ -255,8 +255,8 @@ func TestBlackstoneOriginNoFallback(t *testing.T) {
 			if mode == "tls-identity" || mode == "caller-cancel" || mode == "unknown-dial" || mode == "tls-reset" {
 				wantHits = 0
 			}
-			if err == nil || len(d.got()) != 1 || hits != wantHits {
-				t.Fatalf("unsafe fallback: err=%v dials=%v hits=%d", err, d.got(), hits)
+			if err == nil || len(d.got()) != 1 || hits.Load() != int32(wantHits) {
+				t.Fatalf("unsafe fallback: err=%v dials=%v hits=%d", err, d.got(), hits.Load())
 			}
 		})
 	}

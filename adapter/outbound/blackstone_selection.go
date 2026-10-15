@@ -248,6 +248,10 @@ func blackstoneValidateSelectedConfig(cfg xhttpRealConfig) error {
 		if err != nil {
 			return blackstoneSelectionCapability("xhttp")
 		}
+	case "vless":
+		if cfg.vlessOption == nil {
+			return blackstoneSelectionCapability("vless-fields")
+		}
 	default:
 		return blackstoneSelectionCapability("unknown")
 	}

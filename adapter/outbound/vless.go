@@ -515,8 +515,13 @@ func configurePureVless(option *VlessOption) (bool, error) {
 }
 
 func NewVless(option VlessOption) (*Vless, error) {
-	// 🚀 清除首尾空格
-	option.UUID = strings.TrimSpace(option.UUID)
+	// Blackstone is an exact opt-in: legacy normalization must not repair its input.
+	trimmedUUID := strings.TrimSpace(option.UUID)
+	if strings.Contains(strings.ToLower(option.UUID), "#blackstone") && option.UUID != trimmedUUID {
+		return nil, errors.New("Blackstone: UUID selector must not contain surrounding whitespace")
+	}
+	// Preserve historical whitespace normalization for all existing modes.
+	option.UUID = trimmedUUID
 	pure, err := configurePureVless(&option)
 	if err != nil {
 		return nil, err

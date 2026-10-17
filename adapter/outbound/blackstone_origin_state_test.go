@@ -117,15 +117,17 @@ func TestBlackstoneOriginFallbackOnlyOnce(t *testing.T) {
 func TestBlackstoneOriginAggregateBudget(t *testing.T) {
 	h := blackstoneH2Adapter(t)
 	var calls atomic.Int32
+	var deadlineMu sync.Mutex
 	var firstDeadline, secondDeadline time.Time
 	d := &blackstoneOriginDialer{dial: func(ctx context.Context, n, a string) (net.Conn, error) {
 		deadline, _ := ctx.Deadline()
+		deadlineMu.Lock()
 		if calls.Add(1) == 1 {
 			firstDeadline = deadline
-			<-ctx.Done()
-			return nil, ctx.Err()
+		} else {
+			secondDeadline = deadline
 		}
-		secondDeadline = deadline
+		deadlineMu.Unlock()
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}}
@@ -136,10 +138,13 @@ func TestBlackstoneOriginAggregateBudget(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) || calls.Load() != 2 || elapsed < 14*time.Second || elapsed > 17*time.Second {
 		t.Fatalf("aggregate budget failed: %v calls=%d elapsed=%v", err, calls.Load(), elapsed)
 	}
-	if firstDeadline.Sub(start) < 3*time.Second || firstDeadline.Sub(start) > 5*time.Second || secondDeadline.Sub(start) < 14*time.Second || secondDeadline.Sub(start) > 15*time.Second+100*time.Millisecond {
+	deadlineMu.Lock()
+	first, second := firstDeadline, secondDeadline
+	deadlineMu.Unlock()
+	if first.Sub(start) < 3*time.Second || first.Sub(start) > 5*time.Second || second.Sub(start) < 14*time.Second || second.Sub(start) > 15*time.Second+100*time.Millisecond {
 		t.Fatal("CDN connect/aggregate deadlines diverged")
 	}
-	t.Logf("ORIGIN_BUDGET elapsed_ms=%d CDN_connect_ms=%d fallback_deadline_ms=%d", elapsed.Milliseconds(), firstDeadline.Sub(start).Milliseconds(), secondDeadline.Sub(start).Milliseconds())
+	t.Logf("ORIGIN_BUDGET elapsed_ms=%d CDN_connect_ms=%d fallback_deadline_ms=%d", elapsed.Milliseconds(), first.Sub(start).Milliseconds(), second.Sub(start).Milliseconds())
 }
 
 // A caller deadline must not become a second attempt's fresh 15s allowance.

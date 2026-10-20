@@ -178,6 +178,9 @@ func v4AEAD(psk, salt []byte) (cipher.AEAD, error) {
 }
 
 type v4Reader struct {
+	// readFrame is called under mux only after all buffered plaintext is consumed.
+	header [v4HeaderCipherSize]byte
+	frame  []byte
 	io.Reader
 	aead  cipher.AEAD
 	nonce [v4NonceSize]byte
@@ -198,12 +201,14 @@ func (r *v4Reader) Read(b []byte) (int, error) {
 	}
 
 	n := copy(b, r.buf)
+	// Reusable storage must not extend the lifetime of already-delivered plaintext.
+	clear(r.buf[:n])
 	r.buf = r.buf[n:]
 	return n, nil
 }
 
 func (r *v4Reader) readFrame() ([]byte, error) {
-	headerCipher := make([]byte, v4HeaderCipherSize)
+	headerCipher := r.header[:]
 	if _, err := io.ReadFull(r.Reader, headerCipher); err != nil {
 		return nil, err
 	}
@@ -230,7 +235,11 @@ func (r *v4Reader) readFrame() ([]byte, error) {
 	}
 
 	payloadCipherLength := payloadLength + r.aead.Overhead()
-	frame := make([]byte, paddingLength+payloadCipherLength)
+	frameLength := paddingLength + payloadCipherLength
+	if cap(r.frame) < frameLength {
+		r.frame = make([]byte, frameLength)
+	}
+	frame := r.frame[:frameLength]
 	if _, err := io.ReadFull(r.Reader, frame); err != nil {
 		return nil, err
 	}
@@ -248,6 +257,9 @@ func (r *v4Reader) readFrame() ([]byte, error) {
 }
 
 type v4Writer struct {
+	// Stream storage belongs to this writer and is used only under mux.
+	// Never pooled or released by Close while an underlying Write can use it.
+	frame []byte
 	io.Writer
 	aead                 cipher.AEAD
 	nonce                [v4NonceSize]byte
@@ -365,6 +377,29 @@ func (w *v4Writer) writeFrame(payload []byte, paddingLength int) error {
 	}
 	if len(payload) == 0 && paddingLength != 0 {
 		return errors.New("snell v4 zero chunk with padding")
+	}
+
+	// Leave the randomized/identity-bearing first frame on its existing path.
+	// Steady frames have no padding and can seal straight into reusable wire storage.
+	if w.saltSent && paddingLength == 0 {
+		frameLength := v4HeaderCipherSize
+		if len(payload) > 0 {
+			frameLength += len(payload) + w.aead.Overhead()
+		}
+		if cap(w.frame) < frameLength {
+			w.frame = make([]byte, frameLength)
+		}
+		frame := w.frame[:frameLength]
+		clear(frame[:v4HeaderPlainSize])
+		frame[0] = 4
+		binary.BigEndian.PutUint16(frame[5:7], uint16(len(payload)))
+		w.aead.Seal(frame[:0], w.nonce[:], frame[:v4HeaderPlainSize], nil)
+		incrementV4Nonce(w.nonce[:])
+		if len(payload) > 0 {
+			w.aead.Seal(frame[v4HeaderCipherSize:v4HeaderCipherSize], w.nonce[:], payload, nil)
+			incrementV4Nonce(w.nonce[:])
+		}
+		return writeFull(w.Writer, frame)
 	}
 
 	header := make([]byte, v4HeaderPlainSize)

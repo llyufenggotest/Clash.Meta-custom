@@ -42,6 +42,7 @@ var EnforceBindInterface = false
 
 type Listener struct {
 	closed  bool
+	cancel  context.CancelFunc
 	options LC.Tun
 	handler *ListenerHandler
 	tunName string
@@ -134,7 +135,12 @@ func checkTunName(tunName string) (ok bool) {
 	return true
 }
 
-func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Listener, err error) {
+func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (*Listener, error) {
+	return newListener(options, tunnel, tunNew, tun.NewStack, additions...)
+}
+
+// Device and stack factories allow constructor/rollback tests without host TUN configuration.
+func newListener(options LC.Tun, tunnel C.Tunnel, openTun func(tun.Options) (tun.Tun, error), newStack func(string, tun.StackOptions) (tun.Stack, error), additions ...inbound.Addition) (l *Listener, err error) {
 	// Validate dns-mode before any tunnel/device work so invalid configs fail fast.
 	switch options.DNSMode {
 	case "", tun.DNSModeDisabled, tun.DNSModeNative, tun.DNSModeHijack:
@@ -147,7 +153,6 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 			inbound.WithSpecialRules(""),
 		}
 	}
-	ctx := context.TODO()
 	rpTunnel := tunnel.(P.Tunnel)
 	if options.GSOMaxSize == 0 {
 		options.GSOMaxSize = 65536
@@ -326,7 +331,9 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		Inet6Address:          options.Inet6Address,
 		DisableICMPForwarding: options.DisableICMPForwarding,
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	l = &Listener{
+		cancel:  cancel,
 		closed:  false,
 		options: options,
 		handler: handler,
@@ -488,7 +495,7 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		}
 
 	}
-	tunIf, err := tunNew(tunOptions)
+	tunIf, err := openTun(tunOptions)
 	if err != nil {
 		err = E.Cause(err, "configure tun interface")
 		return
@@ -514,16 +521,17 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 	}
 	l.tunIf = tunIf
 
-	tunStack, err := tun.NewStack(strings.ToLower(options.Stack.String()), stackOptions)
+	tunStack, err := newStack(strings.ToLower(options.Stack.String()), stackOptions)
 	if err != nil {
 		return
 	}
 
+	// Own the stack before Start: a partially started stack also needs rollback.
+	l.tunStack = tunStack
 	err = tunStack.Start()
 	if err != nil {
 		return
 	}
-	l.tunStack = tunStack
 
 	if l.autoRedirect != nil {
 		if len(l.options.RouteAddressSet) > 0 && len(l.routeAddressSet) == 0 {
@@ -678,6 +686,10 @@ func parseRange[T constraints.Integer](uidRanges []ranges.Range[T], rangeList []
 }
 
 func (l *Listener) Close() error {
+	// Stop context-owned NAT maintenance even when stack/device Close fails.
+	if l.cancel != nil {
+		l.cancel()
+	}
 	l.closed = true
 	resolver.RemoveSystemDnsBlacklist(l.dnsServerIp...)
 	if l.autoRedirectOutputMark != 0 {

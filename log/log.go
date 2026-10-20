@@ -3,6 +3,8 @@ package log
 import (
 	"fmt"
 	"os"
+	"sync"
+	"sync/atomic"
 
 	"github.com/metacubex/mihomo/common/observable"
 
@@ -10,12 +12,15 @@ import (
 )
 
 var (
-	logCh  = make(chan Event)
-	source = observable.NewObservable[Event](logCh)
-	level  = INFO
+	logCh         = make(chan Event)
+	source        = observable.NewObservable[Event](logCh)
+	level         atomic.Int64
+	subscribers   atomic.Int64
+	subscriptions sync.Map // observable.Subscription[Event] -> struct{}
 )
 
 func init() {
+	SetLevel(INFO)
 	log.SetOutput(os.Stdout)
 	log.SetLevel(log.DebugLevel)
 	log.SetFormatter(&log.TextFormatter{
@@ -35,25 +40,29 @@ func (e *Event) Type() string {
 }
 
 func Infoln(format string, v ...any) {
-	event := newLog(INFO, format, v...)
-	logCh <- event
-	print(event)
+	logln(INFO, format, v...)
 }
 
 func Warnln(format string, v ...any) {
-	event := newLog(WARNING, format, v...)
-	logCh <- event
-	print(event)
+	logln(WARNING, format, v...)
 }
 
 func Errorln(format string, v ...any) {
-	event := newLog(ERROR, format, v...)
-	logCh <- event
-	print(event)
+	logln(ERROR, format, v...)
 }
 
 func Debugln(format string, v ...any) {
-	event := newLog(DEBUG, format, v...)
+	logln(DEBUG, format, v...)
+}
+
+func logln(logLevel LogLevel, format string, v ...any) {
+	// Level filters console output only: subscribers filter independently.
+	// Skip work only when neither can observe this call. Concurrent changes
+	// may take effect after this check, just as after an ordinary log call.
+	if logLevel < Level() && subscribers.Load() == 0 {
+		return
+	}
+	event := newLog(logLevel, format, v...)
 	logCh <- event
 	print(event)
 }
@@ -63,24 +72,37 @@ func Fatalln(format string, v ...any) {
 }
 
 func Subscribe() observable.Subscription[Event] {
-	sub, _ := source.Subscribe()
+	// Count before registration, uncount only after removal: transitions may
+	// cause extra publication, never an active listener undercount.
+	subscribers.Add(1)
+	sub, err := source.Subscribe()
+	if err != nil {
+		subscribers.Add(-1)
+		return nil
+	}
+	subscriptions.Store(sub, struct{}{})
 	return sub
 }
 
 func UnSubscribe(sub observable.Subscription[Event]) {
+	// Preserve the observable's synchronous removal even for concurrent or
+	// repeated cancellation; decrement at most once, after removal completes.
 	source.UnSubscribe(sub)
+	if _, loaded := subscriptions.LoadAndDelete(sub); loaded {
+		subscribers.Add(-1)
+	}
 }
 
 func Level() LogLevel {
-	return level
+	return LogLevel(level.Load())
 }
 
 func SetLevel(newLevel LogLevel) {
-	level = newLevel
+	level.Store(int64(newLevel))
 }
 
 func print(data Event) {
-	if data.LogLevel < level {
+	if data.LogLevel < Level() {
 		return
 	}
 

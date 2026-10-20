@@ -1,12 +1,16 @@
 package sing_tun
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/netip"
 	"runtime"
+	"runtime/pprof"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,52 +32,74 @@ func (d *lifecycleDevice) Read([]byte) (int, error)    { return 0, io.EOF }
 func (d *lifecycleDevice) Write(p []byte) (int, error) { return len(p), nil }
 func (d *lifecycleDevice) Close() error                { d.closed = true; return nil }
 
-// Keep host-device/firewall operations outside this fixture. Use the exact
-// StackOptions.Context passed by the production constructor for real TCPNat workers.
+// Both constructor factories stay replaced: no host device/firewall operations.
+// Labels are inherited by NewNat's real goroutine, without replacing its worker
+// or wrapping the exact production StackOptions.Context passed to NewNat.
 type lifecycleStack struct {
 	options tun.StackOptions
 	closed  bool
+	workers []string
 }
 
+var lifecycleWorkerSequence atomic.Uint64
+
 func (s *lifecycleStack) Start() error {
-	for range s.options.TunOptions.Inet4Address {
-		_ = tun.NewNat(s.options.Context, time.Hour)
-	}
-	for range s.options.TunOptions.Inet6Address {
-		_ = tun.NewNat(s.options.Context, time.Hour)
+	for range len(s.options.TunOptions.Inet4Address) + len(s.options.TunOptions.Inet6Address) {
+		id := fmt.Sprint(lifecycleWorkerSequence.Add(1))
+		s.workers = append(s.workers, id)
+		pprof.Do(context.Background(), pprof.Labels("lifecycle-nat", id), func(context.Context) {
+			_ = tun.NewNat(s.options.Context, time.Hour)
+		})
 	}
 	return nil
 }
 func (s *lifecycleStack) Close() error { s.closed = true; return nil }
-func lifecycleNATWorkers() int {
-	p := make([]byte, 1<<20)
-	n := runtime.Stack(p, true)
-	return strings.Count(string(p[:n]), "(*TCPNat).loopCheckTimeout(")
-}
-func waitLifecycleWorkers(t *testing.T, want int) {
+
+func lifecycleWorkerRunning(t *testing.T, id string) bool {
 	t.Helper()
-	until := time.Now().Add(time.Second)
-	for time.Now().Before(until) {
-		if lifecycleNATWorkers() == want {
-			return
-		}
-		runtime.Gosched()
+	var profile bytes.Buffer
+	if err := pprof.Lookup("goroutine").WriteTo(&profile, 1); err != nil {
+		t.Fatal(err)
 	}
-	t.Fatalf("NAT workers=%d want=%d", lifecycleNATWorkers(), want)
+	for _, block := range strings.Split(profile.String(), "\n\n") {
+		if strings.Contains(block, fmt.Sprintf(`"lifecycle-nat":%q`, id)) &&
+			strings.Contains(block, "(*TCPNat).loopCheckTimeout") {
+			return true
+		}
+	}
+	return false
 }
 
-type lifecycleFailStart struct{ lifecycleStack }
+func (s *lifecycleStack) waitWorkers(t *testing.T, running bool) {
+	t.Helper()
+	for _, id := range s.workers {
+		// Same one-second bound as before; completion is per real worker, not
+		// a process-global count that includes another fixture's retirement.
+		until := time.Now().Add(time.Second)
+		for lifecycleWorkerRunning(t, id) != running {
+			if time.Now().After(until) {
+				t.Fatalf("NAT worker %s running=%v want=%v (context=%v)", id, !running, running, s.options.Context.Err())
+			}
+			runtime.Gosched()
+		}
+	}
+}
+
+type lifecycleFailStart struct {
+	lifecycleStack
+	t *testing.T
+}
 
 func (s *lifecycleFailStart) Start() error {
 	_ = s.lifecycleStack.Start()
+	s.waitWorkers(s.t, true)
 	return errors.New("fixture start failed")
 }
 func TestListenerStartFailureClosesOwnedStack(t *testing.T) {
-	before := lifecycleNATWorkers()
 	device := &lifecycleDevice{}
 	var stack *lifecycleFailStart
 	l, err := newListener(LC.Tun{Device: "lifecycle-fixture", Stack: C.TunSystem, Inet4Address: []netip.Prefix{netip.MustParsePrefix("198.18.0.1/30")}}, lifecycleTunnel{}, func(tun.Options) (tun.Tun, error) { return device, nil }, func(_ string, o tun.StackOptions) (tun.Stack, error) {
-		stack = &lifecycleFailStart{lifecycleStack{options: o}}
+		stack = &lifecycleFailStart{lifecycleStack: lifecycleStack{options: o}, t: t}
 		return stack, nil
 	})
 	if l != nil || err == nil || err.Error() != "fixture start failed" {
@@ -85,7 +111,7 @@ func TestListenerStartFailureClosesOwnedStack(t *testing.T) {
 	if !device.closed || stack.options.Context.Err() != context.Canceled {
 		t.Fatal("constructor rollback did not close device and cancel context")
 	}
-	waitLifecycleWorkers(t, before)
+	stack.waitWorkers(t, false)
 }
 
 type lifecycleResolver struct{ resolver.Resolver }
@@ -97,7 +123,6 @@ func TestListenerCloseCancelsNATMaintenance(t *testing.T) {
 	t.Cleanup(func() { resolver.SystemResolver = old })
 	for _, mode := range []C.TUNStack{C.TunSystem, C.TunMixed} {
 		t.Run(mode.String(), func(t *testing.T) {
-			before := lifecycleNATWorkers()
 			for i := 0; i < 5; i++ {
 				device := &lifecycleDevice{}
 				var stack *lifecycleStack
@@ -111,7 +136,8 @@ func TestListenerCloseCancelsNATMaintenance(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				waitLifecycleWorkers(t, before+2)
+				t.Cleanup(func() { _ = l.Close() })
+				stack.waitWorkers(t, true)
 				if err := l.Close(); err != nil {
 					t.Fatal(err)
 				}
@@ -121,8 +147,28 @@ func TestListenerCloseCancelsNATMaintenance(t *testing.T) {
 				if stack.options.Context.Err() != context.Canceled {
 					t.Fatalf("listener Close left production StackOptions.Context live: %v", stack.options.Context.Err())
 				}
-				waitLifecycleWorkers(t, before)
+				stack.waitWorkers(t, false)
 			}
 		})
 	}
+}
+
+func TestLifecycleWorkerAttributionIgnoresOtherFixtureRetirement(t *testing.T) {
+	options := tun.Options{Inet4Address: []netip.Prefix{netip.MustParsePrefix("198.18.0.1/30")}}
+	oldCtx, retire := context.WithCancel(context.Background())
+	defer retire()
+	old := lifecycleStack{options: tun.StackOptions{Context: oldCtx, TunOptions: options}}
+	_ = old.Start()
+	old.waitWorkers(t, true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	current := lifecycleStack{options: tun.StackOptions{Context: ctx, TunOptions: options}}
+	_ = current.Start()
+	// Force the exact baseline-count invalidation from the RED replay: another
+	// real NAT retires while this fixture is starting. Its identity is ignored.
+	retire()
+	old.waitWorkers(t, false)
+	current.waitWorkers(t, true)
+	cancel()
+	current.waitWorkers(t, false)
 }

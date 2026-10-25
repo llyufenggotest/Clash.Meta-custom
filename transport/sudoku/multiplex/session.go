@@ -331,7 +331,8 @@ func (s *Session) requestPong() {
 		return
 	}
 	go func() {
-		s.pongPending.Store(false)
+		// Keep ownership until sendFrame returns, including blocked and failed sends.
+		defer s.pongPending.Store(false)
 		_ = s.sendFrame(framePong, 0, nil)
 	}()
 }

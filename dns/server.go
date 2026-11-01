@@ -2,27 +2,42 @@ package dns
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net"
+	"sync"
+	"time"
 
 	"github.com/metacubex/mihomo/common/sockopt"
 	"github.com/metacubex/mihomo/component/resolver"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
-
 	D "github.com/miekg/dns"
 )
 
 var (
-	address string
-	server  = &Server{}
-
-	dnsDefaultTTL uint32 = 600
+	listenerMu          sync.Mutex
+	address             string // Published only after both transports are ready.
+	server              = &Server{}
+	desiredAddress      string
+	desiredListenConfig C.InboundListenConfig
+	desiredService      resolver.Service
+	listenerSuspended   bool   // Process-local ownership; clearing config does not reset it.
+	dnsDefaultTTL       uint32 = 600
 )
 
 type Server struct {
+	serviceMu sync.RWMutex
 	service   resolver.Service
 	tcpServer *D.Server
 	udpServer *D.Server
+	tcpRun    *dnsServerRun
+	udpRun    *dnsServerRun
+}
+
+type dnsServerRun struct {
+	done chan struct{}
+	err  error // Read only after done is closed.
 }
 
 type serverHandler struct {
@@ -30,101 +45,204 @@ type serverHandler struct {
 	isUDP bool
 }
 
-// ServeDNS implement D.Handler ServeDNS
 func (s serverHandler) ServeDNS(w D.ResponseWriter, r *D.Msg) {
-	msg, err := s.service.ServeMsg(context.Background(), r)
-	if err != nil {
+	s.serviceMu.RLock()
+	service := s.service
+	s.serviceMu.RUnlock()
+	var msg *D.Msg
+	var err error
+	if service != nil {
+		msg, err = service.ServeMsg(context.Background(), r)
+	}
+	if service == nil || err != nil || msg == nil {
 		m := new(D.Msg)
 		m.SetRcode(r, D.RcodeServerFailure)
-		// does not matter if this write fails
-		w.WriteMsg(m)
+		_ = w.WriteMsg(m)
 		return
 	}
 	if s.isUDP {
-		// RFC 6891: fit the reply into the client's advertised buffer size,
-		// setting the TC bit if records must be dropped; 512 when no OPT present
 		msg.Truncate(resolver.RequestUDPSize(r))
 	}
 	msg.Compress = true
-	w.WriteMsg(msg)
+	_ = w.WriteMsg(msg)
 }
-
-func (s *Server) UDPHandler() D.Handler {
-	return serverHandler{Server: s, isUDP: true}
-}
-
-func (s *Server) TCPHandler() D.Handler {
-	return serverHandler{Server: s, isUDP: false}
-}
-
+func (s *Server) UDPHandler() D.Handler { return serverHandler{Server: s, isUDP: true} }
+func (s *Server) TCPHandler() D.Handler { return serverHandler{Server: s} }
 func (s *Server) SetService(service resolver.Service) {
+	s.serviceMu.Lock()
 	s.service = service
+	s.serviceMu.Unlock()
 }
 
+// ReCreateServer retains the existing caller contract; ownership-sensitive
+// callers can use ReCreateServerWithError to observe bind/readiness failures.
 func ReCreateServer(addr string, lc C.InboundListenConfig, service resolver.Service) {
-	if addr == address && service != nil {
-		server.SetService(service)
-		return
+	if err := ReCreateServerWithError(addr, lc, service); err != nil {
+		log.Errorln("Start DNS server error: %s", err)
 	}
+}
 
-	if server.tcpServer != nil {
-		_ = server.tcpServer.Shutdown()
-		server.tcpServer = nil
-	}
-
-	if server.udpServer != nil {
-		_ = server.udpServer.Shutdown()
-		server.udpServer = nil
-	}
-
-	server.service = nil
-	address = ""
-
+func ReCreateServerWithError(addr string, lc C.InboundListenConfig, service resolver.Service) error {
+	listenerMu.Lock()
+	defer listenerMu.Unlock()
+	desiredAddress, desiredListenConfig, desiredService = addr, lc, service
 	if addr == "" || lc == nil || service == nil {
-		return
+		desiredAddress, desiredListenConfig, desiredService = "", nil, nil
+		stopServerLocked()
+		return nil
 	}
-
-	var err error
-	defer func() {
-		if err != nil {
-			log.Errorln("Start DNS server error: %s", err.Error())
-		}
-	}()
-
 	_, port, err := net.SplitHostPort(addr)
-	if port == "0" || port == "" || err != nil {
-		return
+	if err != nil {
+		stopServerLocked()
+		return err
 	}
+	// Keep the established disabled-listener convention for zero/empty ports.
+	if port == "0" || port == "" {
+		desiredAddress, desiredListenConfig, desiredService = "", nil, nil
+		stopServerLocked()
+		return nil
+	}
+	if listenerSuspended {
+		stopServerLocked()
+		return nil
+	}
+	return startServerLocked()
+}
 
-	address = addr
-	server = &Server{service: service}
+// SuspendServer relinquishes sockets while retaining resolver/listener intent.
+// All subsequent recreates remain socket-free until ResumeServer is called.
+func SuspendServer() error {
+	listenerMu.Lock()
+	defer listenerMu.Unlock()
+	listenerSuspended = true
+	stopServerLocked()
+	return nil
+}
 
-	go func() {
-		p, err := lc.ListenPacket(context.Background(), "udp", addr)
-		if err != nil {
-			log.Errorln("Start DNS server(UDP) error: %s", err.Error())
-			return
+// ResumeServer reports success only after the current desired listener is ready.
+// A failed resume remains retryable, including at the identical address.
+func ResumeServer() error {
+	listenerMu.Lock()
+	defer listenerMu.Unlock()
+	listenerSuspended = false
+	return startServerLocked()
+}
+
+// EnsureServer verifies readiness without changing the ownership gate. Setup
+// callers use it to avoid acknowledging a configuration whose bind failed.
+func EnsureServer() error {
+	listenerMu.Lock()
+	defer listenerMu.Unlock()
+	if listenerSuspended {
+		return nil
+	}
+	return startServerLocked()
+}
+
+// StopServer clears listener intent, not the process-local ownership gate.
+// It deliberately leaves resolver.DefaultService and its policy untouched.
+func StopServer() {
+	listenerMu.Lock()
+	defer listenerMu.Unlock()
+	desiredAddress, desiredListenConfig, desiredService = "", nil, nil
+	stopServerLocked()
+}
+
+func runAlive(run *dnsServerRun) bool {
+	if run == nil {
+		return false
+	}
+	select {
+	case <-run.done:
+		return false
+	default:
+		return true
+	}
+}
+
+func startDNSRun(srv *D.Server) (*dnsServerRun, error) {
+	run := &dnsServerRun{done: make(chan struct{})}
+	ready := make(chan struct{})
+	srv.NotifyStartedFunc = func() { close(ready) }
+	go func() { run.err = srv.ActivateAndServe(); close(run.done) }()
+	select {
+	case <-ready:
+		return run, nil
+	case <-run.done:
+		if run.err == nil {
+			return run, errors.New("DNS server stopped before readiness")
 		}
+		return run, run.err
+	}
+}
 
-		if err := sockopt.UDPReuseaddr(p); err != nil {
-			log.Warnln("Failed to Reuse UDP Address: %s", err)
+func startServerLocked() error {
+	if desiredAddress == "" || desiredListenConfig == nil || desiredService == nil {
+		stopServerLocked()
+		return nil
+	}
+	if address == desiredAddress && runAlive(server.tcpRun) && runAlive(server.udpRun) {
+		server.SetService(desiredService)
+		return nil
+	}
+	stopServerLocked()
+	// Bind synchronously, publishing neither address nor a partial generation.
+	p, err := desiredListenConfig.ListenPacket(context.Background(), "udp", desiredAddress)
+	if err != nil {
+		return fmt.Errorf("DNS UDP bind: %w", err)
+	}
+	l, err := desiredListenConfig.Listen(context.Background(), "tcp", desiredAddress)
+	if err != nil {
+		_ = p.Close()
+		return fmt.Errorf("DNS TCP bind: %w", err)
+	}
+	if err := sockopt.UDPReuseaddr(p); err != nil {
+		log.Warnln("Failed to Reuse UDP Address: %s", err)
+	}
+	s := &Server{service: desiredService}
+	s.udpServer = &D.Server{Addr: desiredAddress, PacketConn: p, Handler: s.UDPHandler()}
+	s.tcpServer = &D.Server{Addr: desiredAddress, Listener: l, Handler: s.TCPHandler()}
+	s.udpRun, err = startDNSRun(s.udpServer)
+	if err == nil {
+		s.tcpRun, err = startDNSRun(s.tcpServer)
+	}
+	if err != nil {
+		stopGeneration(s)
+		_ = p.Close()
+		_ = l.Close()
+		return err
+	}
+	server, address = s, desiredAddress
+	log.Infoln("DNS server(TCP/UDP) listening at: %s", address)
+	return nil
+}
+
+func stopServerLocked() {
+	s := server
+	server, address = &Server{}, ""
+	stopGeneration(s)
+}
+
+func stopGeneration(s *Server) {
+	// ShutdownContext marks the serve loop stopped before waiting for handlers.
+	// Bound only the drain, never change active resolver request budgets. Explicit
+	// socket closure also covers a generation whose ActivateAndServe failed early.
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	var wg sync.WaitGroup
+	for _, srv := range []*D.Server{s.tcpServer, s.udpServer} {
+		if srv == nil {
+			continue
 		}
-
-		log.Infoln("DNS server(UDP) listening at: %s", p.LocalAddr().String())
-		server.udpServer = &D.Server{Addr: addr, PacketConn: p, Handler: server.UDPHandler()}
-		_ = server.udpServer.ActivateAndServe()
-	}()
-
-	go func() {
-		l, err := lc.Listen(context.Background(), "tcp", addr)
-		if err != nil {
-			log.Errorln("Start DNS server(TCP) error: %s", err.Error())
-			return
-		}
-
-		log.Infoln("DNS server(TCP) listening at: %s", l.Addr().String())
-		server.tcpServer = &D.Server{Addr: addr, Listener: l, Handler: server.TCPHandler()}
-		_ = server.tcpServer.ActivateAndServe()
-	}()
-
+		wg.Add(1)
+		go func(srv *D.Server) { defer wg.Done(); _ = srv.ShutdownContext(ctx) }(srv)
+	}
+	wg.Wait()
+	if s.tcpServer != nil && s.tcpServer.Listener != nil {
+		_ = s.tcpServer.Listener.Close()
+	}
+	if s.udpServer != nil && s.udpServer.PacketConn != nil {
+		_ = s.udpServer.PacketConn.Close()
+	}
+	s.SetService(nil)
 }

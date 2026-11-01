@@ -109,6 +109,46 @@ func ReCreateServerWithError(addr string, lc C.InboundListenConfig, service reso
 	return startServerLocked()
 }
 
+// ReplaceServerWithError admits a configuration only after listener readiness.
+// Unlike a retryable recreate/resume, failure preserves the active generation
+// and all prior desired intent. Suspended admission remains socket-free.
+func ReplaceServerWithError(addr string, lc C.InboundListenConfig, service resolver.Service) error {
+	listenerMu.Lock()
+	defer listenerMu.Unlock()
+	if addr != "" && lc != nil && service != nil {
+		_, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return err
+		}
+		if port == "0" || port == "" {
+			addr, lc, service = "", nil, nil
+		}
+	} else {
+		addr, lc, service = "", nil, nil
+	}
+	if listenerSuspended || addr == "" {
+		desiredAddress, desiredListenConfig, desiredService = addr, lc, service
+		stopServerLocked()
+		return nil
+	}
+	if address == addr && runAlive(server.tcpRun) && runAlive(server.udpRun) {
+		desiredAddress, desiredListenConfig, desiredService = addr, lc, service
+		server.SetService(service)
+		return nil
+	}
+	// Do not retire the old listener or publish candidate intent on a failed
+	// UDP/TCP bind or readiness check. A prepared generation is independent.
+	next, err := newServer(addr, lc, service)
+	if err != nil {
+		return err
+	}
+	old := server
+	desiredAddress, desiredListenConfig, desiredService = addr, lc, service
+	server, address = next, addr
+	stopGeneration(old)
+	return nil
+}
+
 // SuspendServer relinquishes sockets while retaining resolver/listener intent.
 // All subsequent recreates remain socket-free until ResumeServer is called.
 func SuspendServer() error {
@@ -186,22 +226,31 @@ func startServerLocked() error {
 		return nil
 	}
 	stopServerLocked()
-	// Bind synchronously, publishing neither address nor a partial generation.
-	p, err := desiredListenConfig.ListenPacket(context.Background(), "udp", desiredAddress)
+	s, err := newServer(desiredAddress, desiredListenConfig, desiredService)
 	if err != nil {
-		return fmt.Errorf("DNS UDP bind: %w", err)
+		return err
 	}
-	l, err := desiredListenConfig.Listen(context.Background(), "tcp", desiredAddress)
+	server, address = s, desiredAddress
+	return nil
+}
+
+// newServer prepares a ready, independent generation without publishing it.
+func newServer(addr string, lc C.InboundListenConfig, service resolver.Service) (*Server, error) {
+	p, err := lc.ListenPacket(context.Background(), "udp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("DNS UDP bind: %w", err)
+	}
+	l, err := lc.Listen(context.Background(), "tcp", addr)
 	if err != nil {
 		_ = p.Close()
-		return fmt.Errorf("DNS TCP bind: %w", err)
+		return nil, fmt.Errorf("DNS TCP bind: %w", err)
 	}
 	if err := sockopt.UDPReuseaddr(p); err != nil {
 		log.Warnln("Failed to Reuse UDP Address: %s", err)
 	}
-	s := &Server{service: desiredService}
-	s.udpServer = &D.Server{Addr: desiredAddress, PacketConn: p, Handler: s.UDPHandler()}
-	s.tcpServer = &D.Server{Addr: desiredAddress, Listener: l, Handler: s.TCPHandler()}
+	s := &Server{service: service}
+	s.udpServer = &D.Server{Addr: addr, PacketConn: p, Handler: s.UDPHandler()}
+	s.tcpServer = &D.Server{Addr: addr, Listener: l, Handler: s.TCPHandler()}
 	s.udpRun, err = startDNSRun(s.udpServer)
 	if err == nil {
 		s.tcpRun, err = startDNSRun(s.tcpServer)
@@ -210,11 +259,10 @@ func startServerLocked() error {
 		stopGeneration(s)
 		_ = p.Close()
 		_ = l.Close()
-		return err
+		return nil, err
 	}
-	server, address = s, desiredAddress
-	log.Infoln("DNS server(TCP/UDP) listening at: %s", address)
-	return nil
+	log.Infoln("DNS server(TCP/UDP) listening at: %s", addr)
+	return s, nil
 }
 
 func stopServerLocked() {

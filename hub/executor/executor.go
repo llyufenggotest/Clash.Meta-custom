@@ -101,6 +101,16 @@ func ApplyConfig(cfg *config.Config, force bool) error {
 			return err
 		}
 	}
+	// DNS readiness is the final fallible admission gate. No tunnel, resolver
+	// global or wrapper configuration is published before it succeeds.
+	if err := updateDNS(cfg.DNS, cfg.General.IPv6); err != nil {
+		// Preflight succeeded, but these candidate providers were never handed
+		// to the tunnel. Release their prepared matchers/owners on rejection.
+		if features.IOS || features.WithLowMemory {
+			closeRuleProviders(cfg.RuleProviders)
+		}
+		return err
+	}
 	log.SetLevel(cfg.General.LogLevel)
 
 	tunnel.OnSuspend()
@@ -119,7 +129,6 @@ func ApplyConfig(cfg *config.Config, force bool) error {
 	updateSniffer(cfg.Sniffer)
 	updateHosts(cfg.Hosts)
 	updateGeneral(cfg.General, true)
-	updateDNS(cfg.DNS, cfg.General.IPv6)
 	updateNTP(cfg.NTP) // initialize NTP after DNS because an NTP server may be a hostname.
 	//updateListeners(cfg.General, cfg.Listeners, force)
 	//updateTun(cfg.General) // tun should not care "force"
@@ -258,15 +267,17 @@ func updateNTP(c *config.NTP) {
 	}
 }
 
-func updateDNS(c *config.DNS, generalIPv6 bool) {
+func updateDNS(c *config.DNS, generalIPv6 bool) error {
 	if !c.Enable {
+		if err := dns.ReplaceServerWithError("", nil, nil); err != nil {
+			return err
+		}
 		resolver.DefaultResolver = nil
 		resolver.DefaultHostMapper = nil
 		resolver.DefaultService = nil
 		resolver.ProxyServerHostResolver = nil
 		resolver.DirectHostResolver = nil
-		dns.ReCreateServer("", nil, nil)
-		return
+		return nil
 	}
 
 	ipv6 := c.IPv6 && generalIPv6
@@ -303,6 +314,11 @@ func updateDNS(c *config.DNS, generalIPv6 bool) {
 	}
 
 	s := dns.NewService(r, m)
+	lc := inbound.NewListenConfig()
+	lc.SetRouteMark(c.ListenRoutingMark)
+	if err := dns.ReplaceServerWithError(c.Listen, lc, s); err != nil {
+		return err
+	}
 
 	resolver.DefaultResolver = r
 	resolver.DefaultHostMapper = m
@@ -321,9 +337,7 @@ func updateDNS(c *config.DNS, generalIPv6 bool) {
 		resolver.DirectHostResolver = r.Resolver
 	}
 
-	lc := inbound.NewListenConfig()
-	lc.SetRouteMark(c.ListenRoutingMark)
-	dns.ReCreateServer(c.Listen, lc, s)
+	return nil
 }
 
 func updateHosts(tree *trie.DomainTrie[resolver.HostValue]) {

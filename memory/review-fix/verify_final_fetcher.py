@@ -28,7 +28,7 @@ def run(cwd, label, command):
 
 
 def probes(cwd, red):
-    overlay = {"Replace": {str(pathlib.Path(cwd) / "adapter/provider/independent_deadline_test.go"): str(ROOT / "memory/review-fix/probes/adapter/provider/independent_deadline_test.go")}}
+    overlay = {"Replace": {str(pathlib.Path(cwd) / "adapter/provider/independent_deadline_test.go"): str(ROOT / "adapter/provider/independent_deadline_test.go")}}
     overlay_path = pathlib.Path(cwd) / "memory/review-fix/final-overlay.json"
     overlay_path.parent.mkdir(parents=True, exist_ok=True)
     overlay_path.write_text(json.dumps(overlay), encoding="utf-8")

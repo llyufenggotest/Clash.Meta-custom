@@ -32,10 +32,9 @@ func TestProxyHTTPFetcherCloseRevokesSubscriptionAndETag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cache := cachefile.Cache()
-	if cache.DB != nil && cache.DB.Path() == C.Path.Cache() {
-		defer cache.Close()
-	}
+	// The process-owned cache is closed by TestMain, not this fixture.
+	// A previous -count iteration must not satisfy this request's barrier.
+	cachefile.Cache().SetSubscriptionInfo("http-owned", "")
 	p.mutex.Lock()
 	done := make(chan struct{})
 	go func() { _, _, _ = p.Fetcher.Update(); close(done) }()

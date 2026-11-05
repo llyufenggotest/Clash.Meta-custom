@@ -26,16 +26,15 @@ func TestPoolWarmCreatesRequestedConnections(t *testing.T) {
 }
 
 func TestPoolConnCloseIsIdempotent(t *testing.T) {
-	rawConn := &recordingConn{
-		readData: []byte{CommandTunnel},
-		readErr:  shadowaead.ErrZeroChunk,
+	client, server := net.Pipe()
+	rawConn := &idleAwareRecordingConn{
+		recordingConn: &recordingConn{readData: []byte{CommandTunnel}, readErr: shadowaead.ErrZeroChunk},
+		parked:        client, idleReadStarted: make(chan struct{}), applicationReadLimit: 2,
 	}
 	pooledConn := &Snell{Conn: rawConn}
-	pool := NewPool(func(context.Context) (*Snell, error) {
-		return nil, errors.New("factory should not be called")
-	})
+	pool := NewPool(func(context.Context) (*Snell, error) { return nil, errors.New("factory should not be called") })
+	t.Cleanup(func() { _ = pool.Close(); _ = rawConn.Close(); _ = server.Close() })
 	conn := &PoolConn{Snell: pooledConn, pool: pool}
-
 	if _, err := conn.Write([]byte{Version, CommandConnectV2, 0}); err != nil {
 		t.Fatal(err)
 	}
@@ -43,28 +42,83 @@ func TestPoolConnCloseIsIdempotent(t *testing.T) {
 	if _, err := conn.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
 		t.Fatalf("expected peer half-close before pooling, got %v", err)
 	}
-	if err := conn.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := conn.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	if rawConn.writes.Load() != 2 {
-		t.Fatalf("close should send the request and one half-close record, got %d writes", rawConn.writes.Load())
-	}
 	if rawConn.reads.Load() != 2 {
-		t.Fatalf("close should observe the peer half-close before pooling, got %d reads", rawConn.reads.Load())
+		t.Fatalf("application reads=%d, want exactly 2", rawConn.reads.Load())
 	}
-
-	got, err := pool.pool.Get()
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-rawConn.idleReadStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("idle read did not start")
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if rawConn.writes.Load() != 2 || rawConn.halfCloses.Load() != 1 {
+		t.Fatalf("writes=%d half-closes=%d, want 2 and 1", rawConn.writes.Load(), rawConn.halfCloses.Load())
+	}
+	if rawConn.reads.Load() != 2 || rawConn.idleReads.Load() != 1 {
+		t.Fatalf("application reads=%d idle reads=%d, want 2 and 1", rawConn.reads.Load(), rawConn.idleReads.Load())
+	}
+	if rawConn.closed.Load() {
+		t.Fatal("healthy idle connection was closed")
+	}
+	got, err := pool.Get()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.conn != pooledConn {
-		t.Fatal("pooled connection mismatch")
+	claimed := got.(*PoolConn)
+	if claimed.Snell != pooledConn || !claimed.Reused() {
+		t.Fatal("standard Get did not claim the pooled connection")
+	}
+	t.Cleanup(func() { _ = claimed.Close() })
+	// The duplicate Close must not enqueue the same connection a second time.
+	if _, err := pool.Get(); err == nil {
+		t.Fatal("duplicate entry returned after repeated Close")
+	}
+	_ = server.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	sent := make(chan error, 1)
+	go func() { _, err := server.Write([]byte{CommandTunnel, 'o', 'k'}); sent <- err }()
+	b := make([]byte, 8)
+	n, err := claimed.Read(b)
+	if err != nil || string(b[:n]) != "ok" {
+		t.Fatalf("claimed read=%q err=%v", b[:n], err)
+	}
+	if err := <-sent; err != nil {
+		t.Fatal(err)
 	}
 }
+
+// First reply and peer half-close are synchronous application reads. After
+// those, a healthy transport blocks until the next request, not another EOF.
+type idleAwareRecordingConn struct {
+	*recordingConn
+	parked               net.Conn
+	idleReadStarted      chan struct{}
+	idleReads            atomic.Int32
+	halfCloses           atomic.Int32
+	applicationReadLimit int32
+}
+
+func (c *idleAwareRecordingConn) Read(b []byte) (int, error) {
+	if c.reads.Load() < c.applicationReadLimit {
+		return c.recordingConn.Read(b)
+	}
+	if c.idleReads.Add(1) == 1 {
+		close(c.idleReadStarted)
+	}
+	return c.parked.Read(b)
+}
+func (c *idleAwareRecordingConn) Write(b []byte) (int, error) {
+	if len(b) == 0 {
+		c.halfCloses.Add(1)
+	}
+	return c.recordingConn.Write(b)
+}
+func (c *idleAwareRecordingConn) Close() error { _ = c.recordingConn.Close(); return c.parked.Close() }
 
 func TestPoolConnCloseBeforeRequestClosesRawConnection(t *testing.T) {
 	rawConn := &recordingConn{}
@@ -164,14 +218,18 @@ func TestPoolConnCloseWriteBeforeRequestClosesRawConnection(t *testing.T) {
 }
 
 func TestPoolConnCloseWriteDoesNotReturnConnectionToPool(t *testing.T) {
-	rawConn := &recordingConn{
-		readErr: shadowaead.ErrZeroChunk,
+	client, server := net.Pipe()
+	rawConn := &idleAwareRecordingConn{
+		recordingConn: &recordingConn{readErr: shadowaead.ErrZeroChunk},
+		parked:        client, idleReadStarted: make(chan struct{}), applicationReadLimit: 1,
 	}
+	t.Cleanup(func() { _ = rawConn.Close(); _ = server.Close() })
 	pooledConn := &Snell{Conn: rawConn, reply: true}
 	factoryConn := &Snell{Conn: &recordingConn{}}
 	pool := NewPool(func(context.Context) (*Snell, error) {
 		return factoryConn, nil
 	})
+	t.Cleanup(func() { _ = pool.Close() })
 	conn := &PoolConn{Snell: pooledConn, pool: pool}
 
 	if _, err := conn.Write([]byte{Version, CommandConnectV2, 0}); err != nil {
@@ -202,7 +260,17 @@ func TestPoolConnCloseWriteDoesNotReturnConnectionToPool(t *testing.T) {
 	if err = conn.Close(); err != nil {
 		t.Fatal(err)
 	}
-	got, err = pool.pool.Get()
+	select {
+	case <-rawConn.idleReadStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("idle read did not start")
+	}
+	claimed, claimErr := pool.Get()
+	if claimErr != nil {
+		t.Fatal(claimErr)
+	}
+	t.Cleanup(func() { _ = claimed.Close() })
+	got = &pooledEntry{conn: claimed.(*PoolConn).Snell}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,6 +282,9 @@ func TestPoolConnCloseWriteDoesNotReturnConnectionToPool(t *testing.T) {
 	}
 	if rawConn.reads.Load() != 1 {
 		t.Fatalf("Close should observe the peer half-close before pooling, got %d reads", rawConn.reads.Load())
+	}
+	if rawConn.halfCloses.Load() != 1 || rawConn.idleReads.Load() != 1 {
+		t.Fatal("want exactly one half-close and one idle read")
 	}
 	if pooledConn.reply {
 		t.Fatal("Close should reset reply before returning the connection to the pool")

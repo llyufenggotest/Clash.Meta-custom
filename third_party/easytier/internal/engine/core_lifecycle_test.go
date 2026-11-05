@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"testing"
 	"time"
@@ -142,4 +143,8 @@ func TestSharedCoreLifecycle(t *testing.T) {
 		t.Fatal("concurrent Close changed cache")
 	}
 	retainedHeap(t, "after-three-concurrent-hosts-retired")
+	// Diagnostic only: force the Go scavenger once to separate allocator
+	// reservations from retained code. Production Close does not force GC.
+	debug.FreeOSMemory()
+	retainedHeap(t, "after-scavenge-cache-resident")
 }

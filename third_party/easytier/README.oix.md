@@ -62,13 +62,25 @@ with its own 120s budget, **not** the adapter's unchanged 30s gate.
 Windows normal diagnostic measured ~10.6 MB retained Go heap after all Hosts
 closed, ~2.4 MB live-pair heap reclaimed, and goroutines returning to baseline.
 Go Sys retains allocator reservations; heap metrics exclude native executable
-mappings and are not an iOS RSS/low-memory proof. Low-memory iOS acceptance
-requires native-device measurements. Cache is bounded to one embedded core,
-but its persistent memory cost remains a release consideration.
+mappings. External Windows sampling measured RSS ~16.3 MB before cold, ~169.4 MB
+after all Hosts retired, and ~67.2 MB after a diagnostic-only FreeOSMemory call
+(cache still resident). Thus the retained cache/native-code footprint is
+**material** (~50.9 MB RSS above pre-cold even after scavenging in this run),
+not just the ~10.6 MB Go heap. Production Close does not force GC/scavenging.
+These are not iOS RSS/low-memory proof; low-memory iOS acceptance requires
+native-device measurements. The cache is bounded to one embedded core, but its
+persistent memory cost remains an explicit release limitation, not a claim
+that memory returns to pre-cold baseline.
+
+`go test ./...` on Windows passes the engine/host/hostabi/reactor/public module
+tests but fails the unchanged upstream update utility test
+`TestCoreArtifactPathUsesCargoTargetDirectory/absolute` (Unix absolute fixture
+versus Windows filepath semantics). The exact same failure was independently
+reproduced from the unmodified original GOMODCACHE module; it was not patched.
 
 Windows original normal shared30s gate passes (~6.37s); original race gate still
-fails at L135/30s. Separate race lifecycle proves cold ~45.08s, warm ~12.65ms,
-post-Close restart ~12.12ms, without a race report. It does **not** make the
+fails at L135/30s. Final separate race lifecycle proves cold ~46.33s, warm ~12.68ms,
+post-Close restart ~12.59ms, without a race report. It does **not** make the
 original race gate green. Linux restart L164 remains for Linux CI to validate;
 no Linux/macOS/iOS success is claimed from Windows.
 

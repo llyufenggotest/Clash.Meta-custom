@@ -78,11 +78,13 @@ tests but fails the unchanged upstream update utility test
 versus Windows filepath semantics). The exact same failure was independently
 reproduced from the unmodified original GOMODCACHE module; it was not patched.
 
-Windows original normal shared30s gate passes (~6.37s); original race gate still
-fails at L135/30s. Final separate race lifecycle proves cold ~46.33s, warm ~12.68ms,
-post-Close restart ~12.59ms, without a race report. It does **not** make the
-original race gate green. Linux restart L164 remains for Linux CI to validate;
-no Linux/macOS/iOS success is claimed from Windows.
+Windows baseline normal shared30s gate passed (~6.37s); baseline race failed at
+L135/30s. Bounded parallel compilation now passes the unchanged Windows original
+normal gate (3.73s) and race gate (18.66s), including forced-stop/restart, in fresh
+processes. The test blob remains `0bc8318232f8c9e11dc3b17b11c0ea3a940faa41`.
+With `with_low_memory` and `GOMEMLIMIT=32MiB`, normal passes (8.54s) but Windows
+race **still fails at L135/30s**. Linux CI and iOS native admission remain open;
+no Windows success substitutes for those gates. See `COLD-COMPILATION.md`.
 
 ## Maintaining and verifying
 

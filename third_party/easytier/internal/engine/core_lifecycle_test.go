@@ -49,6 +49,35 @@ func TestSharedCoreLifecycle(t *testing.T) {
 		t.Fatal("invalid construction warmed cache")
 	}
 	before := retainedHeap(t, "before-cold")
+	// Diagnostic sampling includes transient compiler allocations, not only the
+	// post-GC retained heap. No memory limit or production GC policy is changed.
+	peakStop, peakDone := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(peakDone)
+		ticker := time.NewTicker(5 * time.Millisecond)
+		defer ticker.Stop()
+		var peakAlloc, peakInuse, peakSys uint64
+		for {
+			select {
+			case <-peakStop:
+				t.Logf("sampled peak Go HeapAlloc=%d HeapInuse=%d Sys=%d (5ms sampling, not RSS)", peakAlloc, peakInuse, peakSys)
+				return
+			case <-ticker.C:
+				var m runtime.MemStats
+				runtime.ReadMemStats(&m)
+				if m.HeapAlloc > peakAlloc {
+					peakAlloc = m.HeapAlloc
+				}
+				if m.HeapInuse > peakInuse {
+					peakInuse = m.HeapInuse
+				}
+				if m.Sys > peakSys {
+					peakSys = m.Sys
+				}
+			}
+		}
+	}()
+	defer func() { close(peakStop); <-peakDone }()
 	ctx, done := context.WithTimeout(context.Background(), 120*time.Second)
 	defer done()
 	cold := time.Now()

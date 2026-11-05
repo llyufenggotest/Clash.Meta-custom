@@ -2,9 +2,11 @@ package engine
 
 import (
 	"context"
+	"runtime"
 
 	"github.com/easytier/easytier/easytier-go/internal/artifact"
 	"github.com/metacubex/wazero"
+	"github.com/metacubex/wazero/experimental"
 )
 
 // coreCache is deliberately NOT an arbitrary-WASM cache: its only production
@@ -49,7 +51,15 @@ func (c *coreCache) get(ctx context.Context, compiler coreCompiler) (wazero.Comp
 	}
 	// Strip experimental listener/context values: retained code must not bind
 	// caller-owned state. Preserve deadlines and cancellation during compilation.
-	compiled, err := compiler.CompileModule(compileContext{ctx}, artifact.Core())
+	// Inject only cache-owned bounded concurrency AFTER stripping caller values.
+	// Wazevo gives each worker compiler scratch space, so never use caller counts
+	// or unbounded CPU counts. The gate admits just one cold compilation.
+	workers := runtime.GOMAXPROCS(0)
+	if workers > coreCompilationWorkerLimit {
+		workers = coreCompilationWorkerLimit
+	}
+	compileCtx := experimental.WithCompilationWorkers(compileContext{ctx}, workers)
+	compiled, err := compiler.CompileModule(compileCtx, artifact.Core())
 	if err != nil {
 		return nil, err
 	} // failure is retryable, not a sync.Once poison

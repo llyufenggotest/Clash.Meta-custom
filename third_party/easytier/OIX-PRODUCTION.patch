@@ -15,14 +15,16 @@
 -	defer compiled.Close(contextutil.WithoutCancel(ctx))
 --- /dev/null
 +++ b/internal/engine/core_cache.go
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,72 @@
 +package engine
 +
 +import (
 +	"context"
++	"runtime"
 +
 +	"github.com/easytier/easytier/easytier-go/internal/artifact"
 +	"github.com/metacubex/wazero"
++	"github.com/metacubex/wazero/experimental"
 +)
 +
 +// coreCache is deliberately NOT an arbitrary-WASM cache: its only production
@@ -67,7 +69,15 @@
 +	}
 +	// Strip experimental listener/context values: retained code must not bind
 +	// caller-owned state. Preserve deadlines and cancellation during compilation.
-+	compiled, err := compiler.CompileModule(compileContext{ctx}, artifact.Core())
++	// Inject only cache-owned bounded concurrency AFTER stripping caller values.
++	// Wazevo gives each worker compiler scratch space, so never use caller counts
++	// or unbounded CPU counts. The gate admits just one cold compilation.
++	workers := runtime.GOMAXPROCS(0)
++	if workers > coreCompilationWorkerLimit {
++		workers = coreCompilationWorkerLimit
++	}
++	compileCtx := experimental.WithCompilationWorkers(compileContext{ctx}, workers)
++	compiled, err := compiler.CompileModule(compileCtx, artifact.Core())
 +	if err != nil {
 +		return nil, err
 +	} // failure is retryable, not a sync.Once poison
@@ -78,3 +88,21 @@
 +	c.compiled = compiled
 +	return compiled, nil
 +}
+--- /dev/null
++++ b/internal/engine/core_workers_default.go
+@@ -0,0 +1,5 @@
++//go:build !with_low_memory
++
++package engine
++
++const coreCompilationWorkerLimit = 4
+--- /dev/null
++++ b/internal/engine/core_workers_lowmem.go
+@@ -0,0 +1,7 @@
++//go:build with_low_memory
++
++package engine
++
++// Each compiler owns scratch space. Keep low-memory builds (including iOS NE)
++// to two workers without changing the application's GOMAXPROCS or memory limit.
++const coreCompilationWorkerLimit = 2

@@ -151,3 +151,6 @@ require (
 replace google.golang.org/protobuf => github.com/metacubex/protobuf-go v0.0.0-20260306035419-7ceee0674686
 
 replace github.com/metacubex/sing-shadowsocks2 => ../sing-shadowsocks2
+
+// Pinned EasyTier source and bounded compiled-core cache; see third_party/easytier/README.oix.md.
+replace github.com/easytier/easytier/easytier-go => ./third_party/easytier

@@ -1,0 +1,2 @@
+# Preserve the exact verified upstream bytes on Windows and Unix checkouts.
+* -text

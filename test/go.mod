@@ -15,6 +15,8 @@ replace github.com/metacubex/mihomo => ../
 
 replace github.com/metacubex/sing-shadowsocks2 => ../../sing-shadowsocks2
 
+replace github.com/easytier/easytier/easytier-go => ../third_party/easytier
+
 require (
 	github.com/Microsoft/go-winio v0.6.0 // indirect
 	github.com/RyuaNerin/go-krypto v1.3.0 // indirect

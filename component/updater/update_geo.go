@@ -306,7 +306,12 @@ func RegisterGeoUpdater() {
 		ticker := time.NewTicker(time.Duration(interval) * time.Hour)
 		defer ticker.Stop()
 
-		lastUpdate, err := getUpdateTime()
+		// A retired generation must not inspect mutable geodata path discovery
+		// or perform an initial update after a replacement/stop was accepted.
+		lastUpdate, err := geoUpdaterTime(ctx, id)
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		if err != nil {
 			log.Errorln("[GEO] Get GEO database update time error: %s", err.Error())
 		} else {
@@ -331,6 +336,20 @@ func RegisterGeoUpdater() {
 			}
 		}
 	}()
+}
+
+// geoUpdaterTime serializes legacy geodata path discovery, which caches file
+// names, and rejects generations retired before their first work is admitted.
+func geoUpdaterTime(ctx context.Context, id uint64) (time.Time, error) {
+	geoUpdaterMu.Lock()
+	defer geoUpdaterMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return time.Time{}, err
+	}
+	if geoUpdaterID != id {
+		return time.Time{}, context.Canceled
+	}
+	return getUpdateTime()
 }
 
 func StopGeoUpdater() {
